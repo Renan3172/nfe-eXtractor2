@@ -89,6 +89,24 @@ def validar_chave_acesso(chave: str) -> bool:
     return dv_esperado == int(chave[43])
 
 
+def extrair_metadados_chave(chave: str) -> Dict[str, str]:
+    """Extrai Modelo, Série e Número diretamente dos 44 dígitos da chave de acesso."""
+    modelo_codigo = chave[20:22]
+    serie_raw = chave[22:25]
+    numero_raw = chave[25:34]
+
+    serie_limpa = str(int(serie_raw)) if serie_raw.isdigit() else serie_raw
+    numero_limpo = str(int(numero_raw)) if numero_raw.isdigit() else numero_raw
+    tipo_documento = MAPA_MODELOS.get(modelo_codigo, "NF-e")
+
+    return {
+        "numero": numero_limpo,
+        "serie": serie_limpa,
+        "modelo_codigo": modelo_codigo,
+        "tipo_documento": tipo_documento,
+    }
+
+
 def limpar_digitos(valor: Optional[str]) -> str:
     return re.sub(r"\D", "", valor or "")
 
@@ -756,10 +774,11 @@ async def processar_nota(
             },
         )
 
-    modelo = chave[20:22]
-    tipo_documento = MAPA_MODELOS.get(modelo, "NF-e")
+    metadados = extrair_metadados_chave(chave)
+    modelo = metadados["modelo_codigo"]
+    tipo_documento = metadados["tipo_documento"]
 
-    # Fluxo CT-e / CT-e OS (modelos 57 e 67): retorna apenas a chave de acesso + alerta
+    # Fluxo CT-e / CT-e OS (modelos 57 e 67): retorna chave + número/série/modelo + alerta
     if modelo in ("57", "67"):
         return JSONResponse(
             status_code=200,
@@ -770,6 +789,7 @@ async def processar_nota(
                 "is_cte": True,
                 "chave_acesso": chave,
                 "tipo_documento": tipo_documento,
+                "documento": metadados,
                 "remetente": None,
                 "destinatario": None,
                 "tomador": None,
@@ -792,6 +812,7 @@ async def processar_nota(
                 "is_cte": False,
                 "chave_acesso": chave,
                 "tipo_documento": tipo_documento,
+                "documento": metadados,
                 "remetente": None,
                 "destinatario": None,
                 "tomador": None,
@@ -811,6 +832,7 @@ async def processar_nota(
             "is_cte": False,
             "chave_acesso": chave,
             "tipo_documento": tipo_documento,
+            "documento": metadados,
             "remetente": dados_fiscais["remetente"],
             "destinatario": dados_fiscais["destinatario"],
             "tomador": dados_fiscais["tomador"],
