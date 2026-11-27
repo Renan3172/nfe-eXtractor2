@@ -1,7 +1,9 @@
 import base64
+import html
 import re
 import time
 import xml.etree.ElementTree as ET
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
@@ -25,8 +27,9 @@ MODELOS_GEMINI_CANDIDATOS = [
 _CACHE_GEMINI: Dict[str, Tuple[str, str]] = {}
 
 # Endpoints públicos de consulta pela chave de 44 dígitos
-CONSULTA_DANFE_URL = "https://consultadanfe.com/CDanfe/chave"
-CONSULTA_DACTE_URL = "https://consultadacte.com/CDacte/chave"
+CONSULTA_DANFE_WEB_URL = "https://consultadanfe.com/CDanfe/chave"
+CONSULTA_DANFE_API_URL = "https://consultadanfe.com/api/v1/consulta"
+CONSULTA_DACTE_WEB_URL = "https://consultadacte.com/CDacte/chave"
 
 PROMPT_OCR_FISCAL = """
 Você é um especialista em OCR de documentos fiscais brasileiros (DANFE de NF-e/NFC-e e DACTE de CT-e/CT-e OS).
@@ -93,6 +96,35 @@ def formatar_documento(digitos: str) -> str:
     if len(digitos) == 11:
         return f"{digitos[:3]}.{digitos[3:6]}.{digitos[6:9]}-{digitos[9:]}"
     return digitos
+
+
+def verificar_janela_data_chave(chave: str) -> Optional[str]:
+    """Verifica se a emissão (AAMM nos dígitos 3..6) está fora da janela gratuita do ConsultaDanfe."""
+    try:
+        ano = 2000 + int(chave[2:4])
+        mes = int(chave[4:6])
+        if not (1 <= mes <= 12):
+            return None
+    except ValueError:
+        return None
+
+    agora_br = datetime.now(timezone(timedelta(hours=-3)))
+    mes_atual = (agora_br.year, agora_br.month)
+
+    if agora_br.day < 15:
+        if agora_br.month == 1:
+            mes_minimo = (agora_br.year - 1, 12)
+        else:
+            mes_minimo = (agora_br.year, agora_br.month - 1)
+    else:
+        mes_minimo = mes_atual
+
+    if (ano, mes) < mes_minimo:
+        return (
+            f"Documento emitido em {mes:02d}/{ano}. A consulta pública gratuita do ConsultaDanfe "
+            "aceita apenas notas do mês corrente (ou do mês anterior até o dia 14)."
+        )
+    return None
 
 
 def _extrair_mensagem_erro_google(resp: requests.Response) -> str:
@@ -270,7 +302,6 @@ def extrair_chave_via_gemini(
         detalhe = _extrair_mensagem_erro_google(resp)
         ultimo_erro = f"HTTP {resp.status_code} ({provedor}/{modelo}): {detalhe}"
 
-        # Erros transitórios (sobrecarga / cota por modelo) -> tenta próximo modelo ativo
         if resp.status_code in (500, 502, 503, 504):
             teve_indisponibilidade = True
             continue
@@ -284,7 +315,6 @@ def extrair_chave_via_gemini(
 
         return None, f"Erro retornado pela API do Gemini ({ultimo_erro})."
 
-    # Se todos deram erro e for chave AI Studio, tenta descobrir outro modelo ativo na conta
     if resp_sucesso is None and not chave_limpa.startswith("AQ."):
         for modelo_extra in _descobrir_modelos_aistudio(chave_limpa):
             par = ("aistudio", modelo_extra)
@@ -308,7 +338,6 @@ def extrair_chave_via_gemini(
             if len(testados) >= len(tentativas) + 2:
                 break
 
-    # Retry curto se houve sobrecarga temporária (HTTP 503) nos servidores do Google
     if resp_sucesso is None and teve_indisponibilidade:
         time.sleep(1.2)
         provedor_retry = "vertex" if chave_limpa.startswith("AQ.") else "aistudio"
@@ -368,106 +397,294 @@ def extrair_chave_via_gemini(
     return chave, None
 
 
+def _eh_xml_fiscal(conteudo: bytes) -> bool:
+    inicio = conteudo.lstrip()[:600]
+    return any(
+        marcador in inicio or marcador in conteudo[:4000]
+        for marcador in (b"<nfeProc", b"<NFe", b"<infNFe", b"<cteProc", b"<CTe", b"<infCte")
+    )
+
+
+def _tentar_decodificar_xml(valor: str, session: requests.Session, headers: Dict[str, str]) -> Optional[bytes]:
+    texto = valor.strip()
+    if not texto:
+        return None
+
+    # XML cru ou escapado em HTML (&lt;nfeProc...)
+    if texto.startswith("<") or "&lt;" in texto[:40]:
+        desescapado = html.unescape(texto)
+        raw = desescapado.encode("utf-8", errors="ignore")
+        if _eh_xml_fiscal(raw):
+            return raw
+
+    # URL direta para XML
+    if texto.startswith("http://") or texto.startswith("https://"):
+        try:
+            r = session.get(texto, headers=headers, timeout=12)
+            if r.ok and _eh_xml_fiscal(r.content):
+                return r.content
+        except requests.RequestException:
+            return None
+
+    # Base64 (com ou sem prefixo data:)
+    candidato_b64 = texto.split(",", 1)[1] if texto.startswith("data:") and "," in texto else texto
+    if len(candidato_b64) >= 60:
+        try:
+            decoded = base64.b64decode(candidato_b64, validate=False)
+            if _eh_xml_fiscal(decoded):
+                return decoded
+        except Exception:
+            pass
+
+    return None
+
+
+def _tentar_decodificar_pdf(valor: str, session: requests.Session, headers: Dict[str, str]) -> Optional[bytes]:
+    texto = valor.strip()
+    if not texto:
+        return None
+
+    if texto.startswith("http://") or texto.startswith("https://"):
+        try:
+            r = session.get(texto, headers=headers, timeout=12)
+            if r.ok and r.content.lstrip().startswith(b"%PDF"):
+                return r.content
+        except requests.RequestException:
+            return None
+
+    candidato_b64 = texto.split(",", 1)[1] if texto.startswith("data:") and "," in texto else texto
+    if candidato_b64.startswith("JVBERi") or len(candidato_b64) >= 200:
+        try:
+            decoded = base64.b64decode(candidato_b64, validate=False)
+            if decoded.lstrip().startswith(b"%PDF"):
+                return decoded
+        except Exception:
+            pass
+
+    return None
+
+
+def _extrair_de_json_recursivo(
+    obj: Any, session: requests.Session, headers: Dict[str, str]
+) -> Tuple[Optional[bytes], Optional[bytes], Optional[str]]:
+    """Percorre qualquer estrutura JSON para localizar XML, PDF e eventuais mensagens de erro."""
+    xml_bytes: Optional[bytes] = None
+    pdf_bytes: Optional[bytes] = None
+    msg_erro: Optional[str] = None
+
+    def _visitar(item: Any, chave_pai: str = "") -> None:
+        nonlocal xml_bytes, pdf_bytes, msg_erro
+
+        if isinstance(item, dict):
+            for k, v in item.items():
+                k_low = str(k).lower()
+                if isinstance(v, str) and v.strip():
+                    if not xml_bytes and (
+                        "xml" in k_low
+                        or v.lstrip().startswith("<")
+                        or "&lt;" in v[:40]
+                    ):
+                        achado = _tentar_decodificar_xml(v, session, headers)
+                        if achado:
+                            xml_bytes = achado
+                            continue
+
+                    if not pdf_bytes and (
+                        "pdf" in k_low
+                        or "danfe" in k_low
+                        or "dacte" in k_low
+                        or v.startswith("JVBERi")
+                        or v.startswith("data:application/pdf")
+                    ):
+                        achado_pdf = _tentar_decodificar_pdf(v, session, headers)
+                        if achado_pdf:
+                            pdf_bytes = achado_pdf
+                            continue
+
+                    if not msg_erro and k_low in ("message", "mensagem", "erro", "error", "detail", "msg", "motivo"):
+                        msg_erro = v.strip()
+                else:
+                    _visitar(v, k_low)
+
+        elif isinstance(item, list):
+            for elem in item:
+                _visitar(elem, chave_pai)
+
+        elif isinstance(item, str) and item.strip():
+            if not xml_bytes:
+                achado = _tentar_decodificar_xml(item, session, headers)
+                if achado:
+                    xml_bytes = achado
+            if not pdf_bytes:
+                achado_pdf = _tentar_decodificar_pdf(item, session, headers)
+                if achado_pdf:
+                    pdf_bytes = achado_pdf
+
+    _visitar(obj)
+    return xml_bytes, pdf_bytes, msg_erro
+
+
+def _analisar_resposta_consulta(
+    resp: requests.Response, session: requests.Session, headers: Dict[str, str]
+) -> Tuple[Optional[bytes], Optional[bytes], Optional[str]]:
+    """Extrai (xml_bytes, pdf_bytes, diagnostico) de uma resposta HTTP."""
+    content_type = resp.headers.get("Content-Type", "").lower()
+
+    if resp.content.lstrip().startswith(b"%PDF"):
+        return None, resp.content, f"HTTP {resp.status_code} retornou apenas PDF sem XML."
+
+    if _eh_xml_fiscal(resp.content):
+        return resp.content, None, None
+
+    if "json" in content_type or resp.text.lstrip().startswith("{"):
+        try:
+            payload = resp.json()
+        except ValueError:
+            return None, None, f"HTTP {resp.status_code} com JSON inválido."
+
+        xml_b, pdf_b, msg = _extrair_de_json_recursivo(payload, session, headers)
+        if xml_b or pdf_b:
+            return xml_b, pdf_b, msg
+
+        if msg:
+            return None, None, f"HTTP {resp.status_code}: {msg}"
+
+        chaves_json = ", ".join(list(payload.keys())[:6]) if isinstance(payload, dict) else type(payload).__name__
+        return None, None, f"HTTP {resp.status_code} sem XML no JSON (chaves: {chaves_json})."
+
+    # Resposta HTML (bloqueio anti-bot, sessão ou rota alterada)
+    if "html" in content_type or resp.text.lstrip().startswith("<"):
+        if "cloudflare" in resp.text.lower() or "just a moment" in resp.text.lower():
+            return None, None, f"HTTP {resp.status_code}: proteção anti-bot (Cloudflare) bloqueou a consulta."
+        return None, None, f"HTTP {resp.status_code}: servidor retornou página HTML em vez de XML/JSON."
+
+    return None, None, f"HTTP {resp.status_code} ({content_type or 'sem content-type'})."
+
+
 def consultar_endpoint_publico(
     chave: str, modelo: str
 ) -> Tuple[Optional[bytes], Optional[bytes], Optional[str]]:
     """
-    Consulta o XML e o PDF via endpoint público correspondente:
-    - Modelos 55 / 65 -> ConsultaDanfe
-    - Modelos 57 / 67 -> ConsultaDacte
+    Consulta XML e PDF nos endpoints públicos disponíveis:
+    1) ConsultaDanfe web (CDanfe/chave com sessão e cabeçalhos AJAX)
+    2) ConsultaDanfe REST API pública (/api/v1/consulta)
+    3) ConsultaDacte web (fallback específico para CT-e 57/67)
     """
-    url = CONSULTA_DACTE_URL if modelo in ("57", "67") else CONSULTA_DANFE_URL
-    headers = {
+    session = requests.Session()
+    headers_base = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
         ),
-        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
     }
 
+    xml_final: Optional[bytes] = None
+    pdf_final: Optional[bytes] = None
+    diagnosticos: List[str] = []
+
+    # Tentativa 1: ConsultaDanfe rota web (CDanfe/chave) com cookies de sessão
+    headers_cdanfe = {
+        **headers_base,
+        "Accept": "application/json, text/javascript, */*; q=0.01",
+        "Origin": "https://consultadanfe.com",
+        "Referer": "https://consultadanfe.com/",
+        "X-Requested-With": "XMLHttpRequest",
+    }
     try:
-        resp = requests.post(url, data={"chave": chave}, headers=headers, timeout=25)
-    except requests.Timeout:
-        return None, None, "Tempo limite excedido ao consultar o serviço fiscal público."
-    except requests.RequestException:
-        return None, None, "Não foi possível conectar ao serviço público de consulta fiscal."
-
-    if resp.status_code in (403, 429):
-        return (
-            None,
-            None,
-            "O serviço de consulta limitou temporariamente as requisições. Aguarde e tente novamente.",
-        )
-    if not resp.ok:
-        return (
-            None,
-            None,
-            f"A chave foi lida, mas o serviço de consulta retornou erro (HTTP {resp.status_code}).",
-        )
-
-    xml_bytes: Optional[bytes] = None
-    pdf_bytes: Optional[bytes] = None
-
-    content_type = resp.headers.get("Content-Type", "").lower()
-
-    if "application/json" in content_type:
         try:
-            payload = resp.json()
-        except ValueError:
-            payload = {}
+            session.get("https://consultadanfe.com/", headers=headers_base, timeout=6)
+        except requests.RequestException:
+            pass
 
-        if isinstance(payload, dict):
-            raw_xml = payload.get("xml") or payload.get("codigo_xml") or payload.get("xml_base64")
-            raw_pdf = payload.get("pdf") or payload.get("pdf_base64") or payload.get("danfe") or payload.get("dacte")
-
-            if isinstance(raw_xml, str) and raw_xml.strip():
-                if raw_xml.lstrip().startswith("<"):
-                    xml_bytes = raw_xml.encode("utf-8")
-                elif raw_xml.startswith("http"):
-                    r_xml = requests.get(raw_xml, headers=headers, timeout=15)
-                    if r_xml.ok and r_xml.content.lstrip().startswith(b"<"):
-                        xml_bytes = r_xml.content
-                else:
-                    try:
-                        decoded = base64.b64decode(raw_xml)
-                        if decoded.lstrip().startswith(b"<"):
-                            xml_bytes = decoded
-                    except Exception:
-                        pass
-
-            if isinstance(raw_pdf, str) and raw_pdf.strip():
-                if raw_pdf.startswith("http"):
-                    r_pdf = requests.get(raw_pdf, headers=headers, timeout=15)
-                    if r_pdf.ok:
-                        pdf_bytes = r_pdf.content
-                else:
-                    try:
-                        pdf_bytes = base64.b64decode(raw_pdf)
-                    except Exception:
-                        pass
-
-            if not xml_bytes and payload.get("status") == "error":
-                msg = payload.get("message") or "Documento não encontrado ou não autorizado."
-                return None, None, str(msg)
-
-    elif "xml" in content_type or resp.content.lstrip().startswith(b"<"):
-        if (
-            b"<nfeProc" in resp.content
-            or b"<NFe" in resp.content
-            or b"<cteProc" in resp.content
-            or b"<CTe" in resp.content
-        ):
-            xml_bytes = resp.content
-
-    if not xml_bytes:
-        return (
-            None,
-            None,
-            "A chave foi lida, mas não conseguimos obter os dados do documento no momento "
-            "(serviço indisponível ou documento inexistente).",
+        resp1 = session.post(
+            CONSULTA_DANFE_WEB_URL,
+            data={"chave": chave},
+            headers=headers_cdanfe,
+            timeout=15,
         )
+        xml1, pdf1, diag1 = _analisar_resposta_consulta(resp1, session, headers_cdanfe)
+        if xml1:
+            xml_final = xml1
+        if pdf1:
+            pdf_final = pdf1
+        if diag1 and not xml1:
+            diagnosticos.append(f"CDanfe: {diag1}")
+    except requests.Timeout:
+        diagnosticos.append("CDanfe: tempo limite excedido")
+    except requests.RequestException:
+        diagnosticos.append("CDanfe: falha de conexão")
 
-    return xml_bytes, pdf_bytes, None
+    # Tentativa 2: ConsultaDanfe API REST pública v1 (busca XML/PDF se ainda faltar algum)
+    if not xml_final or not pdf_final:
+        headers_api = {
+            **headers_base,
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
+        try:
+            resp2 = session.post(
+                CONSULTA_DANFE_API_URL,
+                json={"chave": chave},
+                headers=headers_api,
+                timeout=15,
+            )
+            xml2, pdf2, diag2 = _analisar_resposta_consulta(resp2, session, headers_api)
+            if xml2 and not xml_final:
+                xml_final = xml2
+            if pdf2 and not pdf_final:
+                pdf_final = pdf2
+            if diag2 and not xml_final:
+                diagnosticos.append(f"API v1: {diag2}")
+        except requests.Timeout:
+            if not xml_final:
+                diagnosticos.append("API v1: tempo limite excedido")
+        except requests.RequestException:
+            if not xml_final:
+                diagnosticos.append("API v1: falha de conexão")
+
+    # Tentativa 3: Fallback específico para CT-e (57/67)
+    if not xml_final and modelo in ("57", "67"):
+        headers_dacte = {
+            **headers_base,
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+            "Origin": "https://consultadacte.com",
+            "Referer": "https://consultadacte.com/",
+            "X-Requested-With": "XMLHttpRequest",
+        }
+        try:
+            resp3 = session.post(
+                CONSULTA_DACTE_WEB_URL,
+                data={"chave": chave},
+                headers=headers_dacte,
+                timeout=15,
+            )
+            xml3, pdf3, diag3 = _analisar_resposta_consulta(resp3, session, headers_dacte)
+            if xml3:
+                xml_final = xml3
+            if pdf3 and not pdf_final:
+                pdf_final = pdf3
+            if diag3 and not xml_final:
+                diagnosticos.append(f"CDacte: {diag3}")
+        except requests.Timeout:
+            diagnosticos.append("CDacte: tempo limite excedido")
+        except requests.RequestException:
+            diagnosticos.append("CDacte: falha de conexão")
+
+    if xml_final:
+        return xml_final, pdf_final, None
+
+    aviso_data = verificar_janela_data_chave(chave)
+    resumo_diag = " | ".join(diagnosticos) if diagnosticos else "nenhum XML retornado."
+
+    if aviso_data:
+        return None, pdf_final, f"{aviso_data} Detalhe: {resumo_diag}"
+
+    return (
+        None,
+        pdf_final,
+        f"A chave foi lida, mas o XML não pôde ser obtido. Detalhe: {resumo_diag}",
+    )
 
 
 def _tag_local(tag: str) -> str:
@@ -637,7 +854,7 @@ async def processar_nota(
     modelo = chave[20:22]
     tipo_documento = MAPA_MODELOS.get(modelo, "NF-e")
 
-    # Etapa 2: Consulta no endpoint público correspondente (ConsultaDanfe ou ConsultaDacte)
+    # Etapa 2: Consulta no endpoint público correspondente
     xml_bytes, pdf_bytes, erro_consulta = consultar_endpoint_publico(chave, modelo)
 
     if erro_consulta or not xml_bytes:
@@ -653,7 +870,7 @@ async def processar_nota(
                 "destinatario": None,
                 "tomador": None,
                 "xml_base64": None,
-                "pdf_base64": None,
+                "pdf_base64": base64.b64encode(pdf_bytes).decode("utf-8") if pdf_bytes else None,
             },
         )
 
