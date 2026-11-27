@@ -34,7 +34,7 @@ Aplicação web leve para leitura e extração rápida de dados de documentos fi
 
 ---
 
-## Tecnologias Utilizadas
+## Tecnologias utilizadas
 
 * Backend: Python, FastAPI, Requests, ElementTree (xml.etree.ElementTree)
 * Frontend: HTML5, Tailwind CSS, JavaScript puro (Vanilla JS)
