@@ -1,7 +1,7 @@
 import base64
 import re
 import xml.etree.ElementTree as ET
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 from fastapi import FastAPI, File, Form, UploadFile
@@ -9,11 +9,16 @@ from fastapi.responses import JSONResponse
 
 app = FastAPI()
 
-GEMINI_MODEL = "gemini-2.5-flash"
-GEMINI_ENDPOINT = (
-    f"https://generativelanguage.googleapis.com/v1beta/models/"
-    f"{GEMINI_MODEL}:generateContent"
-)
+# Modelos Flash testados em ordem de prioridade caso algum retorne HTTP 404
+MODELOS_GEMINI_CANDIDATOS = [
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+    "gemini-2.0-flash",
+    "gemini-flash-latest",
+]
+
+# Cache leve em memória para evitar novas tentativas após achar o endpoint/modelo ativo
+_CACHE_GEMINI: Dict[str, Tuple[str, str]] = {}
 
 # Endpoints públicos de consulta pela chave de 44 dígitos
 CONSULTA_DANFE_URL = "https://consultadanfe.com/CDanfe/chave"
@@ -86,15 +91,117 @@ def formatar_documento(digitos: str) -> str:
     return digitos
 
 
+def _extrair_mensagem_erro_google(resp: requests.Response) -> str:
+    try:
+        data = resp.json()
+        if isinstance(data, dict):
+            err = data.get("error")
+            if isinstance(err, dict) and err.get("message"):
+                return str(err["message"])
+    except ValueError:
+        pass
+    return f"HTTP {resp.status_code}"
+
+
+def _descobrir_modelo_aistudio(api_key: str) -> Optional[str]:
+    """Consulta a lista de modelos ativos no Google AI Studio caso os nomes padrão deem 404."""
+    try:
+        resp = requests.get(
+            "https://generativelanguage.googleapis.com/v1beta/models",
+            headers={"x-goog-api-key": api_key},
+            timeout=10,
+        )
+        if not resp.ok:
+            return None
+        modelos = resp.json().get("models", [])
+    except Exception:
+        return None
+
+    preferidos: List[str] = []
+    alternativos: List[str] = []
+
+    for item in modelos:
+        nome_completo = str(item.get("name", ""))
+        metodos = item.get("supportedGenerationMethods", [])
+        if "generateContent" not in metodos:
+            continue
+        slug = nome_completo.replace("models/", "").strip()
+        if not slug or "embedding" in slug or "tts" in slug or "imagen" in slug:
+            continue
+        if "gemini" in slug and "flash" in slug:
+            preferidos.append(slug)
+        elif "gemini" in slug:
+            alternativos.append(slug)
+
+    if preferidos:
+        return preferidos[0]
+    if alternativos:
+        return alternativos[0]
+    return None
+
+
+def _montar_tentativas_gemini(api_key: str) -> List[Tuple[str, str]]:
+    """Monta a ordem de (provedor, modelo) priorizando o formato da chave (AQ. vs AIza)."""
+    chave_limpa = api_key.strip()
+    eh_vertex = chave_limpa.startswith("AQ.")
+    cache_key = "vertex" if eh_vertex else "aistudio"
+
+    tentativas: List[Tuple[str, str]] = []
+    if cache_key in _CACHE_GEMINI:
+        tentativas.append(_CACHE_GEMINI[cache_key])
+
+    ordem_provedores = ["vertex", "aistudio"] if eh_vertex else ["aistudio", "vertex"]
+    for provedor in ordem_provedores:
+        for modelo in MODELOS_GEMINI_CANDIDATOS:
+            par = (provedor, modelo)
+            if par not in tentativas:
+                tentativas.append(par)
+
+    return tentativas
+
+
+def _chamar_endpoint_gemini(
+    provedor: str, modelo: str, api_key: str, payload: Dict[str, Any]
+) -> requests.Response:
+    if provedor == "vertex":
+        url = (
+            f"https://aiplatform.googleapis.com/v1/publishers/google/"
+            f"models/{modelo}:generateContent"
+        )
+        return requests.post(
+            url,
+            params={"key": api_key},
+            json=payload,
+            headers={"Content-Type": "application/json"},
+            timeout=25,
+        )
+
+    url = (
+        f"https://generativelanguage.googleapis.com/v1beta/"
+        f"models/{modelo}:generateContent"
+    )
+    return requests.post(
+        url,
+        json=payload,
+        headers={
+            "Content-Type": "application/json",
+            "x-goog-api-key": api_key,
+        },
+        timeout=25,
+    )
+
+
 def extrair_chave_via_gemini(
     imagem_bytes: bytes, mime_type: str, api_key: str
 ) -> Tuple[Optional[str], Optional[str]]:
-    """Envia a imagem para o Gemini e retorna (chave_44_digitos, mensagem_erro)."""
+    """Envia a imagem para o Gemini com suporte automático a chaves AQ. e AIza."""
+    chave_limpa = api_key.strip()
     imagem_b64 = base64.b64encode(imagem_bytes).decode("utf-8")
 
     payload = {
         "contents": [
             {
+                "role": "user",
                 "parts": [
                     {"text": PROMPT_OCR_FISCAL},
                     {
@@ -103,7 +210,7 @@ def extrair_chave_via_gemini(
                             "data": imagem_b64,
                         }
                     },
-                ]
+                ],
             }
         ],
         "generationConfig": {
@@ -111,27 +218,63 @@ def extrair_chave_via_gemini(
         },
     }
 
-    headers = {
-        "Content-Type": "application/json",
-        "x-goog-api-key": api_key.strip(),
-    }
+    tentativas = _montar_tentativas_gemini(chave_limpa)
+    resp_sucesso: Optional[requests.Response] = None
+    ultimo_erro = "Erro desconhecido na API do Gemini."
+    cache_key = "vertex" if chave_limpa.startswith("AQ.") else "aistudio"
+
+    for provedor, modelo in tentativas:
+        try:
+            resp = _chamar_endpoint_gemini(provedor, modelo, chave_limpa, payload)
+        except requests.Timeout:
+            return None, "Tempo limite excedido ao conectar com a API do Gemini. Tente novamente."
+        except requests.RequestException:
+            return None, "Falha de conexão ao comunicar com a API do Gemini."
+
+        if resp.ok:
+            resp_sucesso = resp
+            _CACHE_GEMINI[cache_key] = (provedor, modelo)
+            break
+
+        detalhe = _extrair_mensagem_erro_google(resp)
+        ultimo_erro = f"HTTP {resp.status_code} ({provedor}/{modelo}): {detalhe}"
+
+        # Se for erro de cota, interrompe imediatamente
+        if resp.status_code == 429:
+            return None, "Limite de requisições da sua chave Gemini atingido. Aguarde alguns segundos."
+
+        # Em 404 ou erro de incompatibilidade de endpoint, tenta o próximo candidato
+        if resp.status_code in (400, 401, 403, 404):
+            continue
+
+        return None, f"Erro retornado pela API do Gemini ({ultimo_erro})."
+
+    # Se todos os candidatos falharam e for chave AIza, tenta descobrir dinamicamente um modelo ativo
+    if resp_sucesso is None and not chave_limpa.startswith("AQ."):
+        modelo_ativo = _descobrir_modelo_aistudio(chave_limpa)
+        if modelo_ativo:
+            try:
+                resp = _chamar_endpoint_gemini("aistudio", modelo_ativo, chave_limpa, payload)
+                if resp.ok:
+                    resp_sucesso = resp
+                    _CACHE_GEMINI[cache_key] = ("aistudio", modelo_ativo)
+                else:
+                    ultimo_erro = (
+                        f"HTTP {resp.status_code} (aistudio/{modelo_ativo}): "
+                        f"{_extrair_mensagem_erro_google(resp)}"
+                    )
+            except requests.RequestException:
+                pass
+
+    if resp_sucesso is None:
+        return (
+            None,
+            f"Erro retornado pela API do Gemini ({ultimo_erro}). "
+            "Verifique se a chave está correta em Configurar API.",
+        )
 
     try:
-        resp = requests.post(GEMINI_ENDPOINT, json=payload, headers=headers, timeout=25)
-    except requests.Timeout:
-        return None, "Tempo limite excedido ao conectar com a API do Gemini. Tente novamente."
-    except requests.RequestException:
-        return None, "Falha de conexão ao comunicar com a API do Gemini."
-
-    if resp.status_code in (400, 401, 403):
-        return None, "Chave de API do Gemini inválida ou sem permissão. Verifique em Configurar API."
-    if resp.status_code == 429:
-        return None, "Limite de requisições da sua chave Gemini atingido. Aguarde alguns segundos."
-    if not resp.ok:
-        return None, f"Erro retornado pela API do Gemini (HTTP {resp.status_code})."
-
-    try:
-        dados = resp.json()
+        dados = resp_sucesso.json()
         texto = dados["candidates"][0]["content"]["parts"][0]["text"].strip()
     except (KeyError, IndexError, ValueError, TypeError):
         return None, "Não foi possível interpretar a resposta da IA para esta imagem."
@@ -161,7 +304,6 @@ def consultar_endpoint_publico(
     Consulta o XML e o PDF via endpoint público correspondente:
     - Modelos 55 / 65 -> ConsultaDanfe
     - Modelos 57 / 67 -> ConsultaDacte
-    Retorna (xml_bytes, pdf_bytes, mensagem_erro).
     """
     url = CONSULTA_DACTE_URL if modelo in ("57", "67") else CONSULTA_DANFE_URL
     headers = {
@@ -204,7 +346,6 @@ def consultar_endpoint_publico(
             payload = {}
 
         if isinstance(payload, dict):
-            # Compatível com retornos em base64, XML cru ou URL direta
             raw_xml = payload.get("xml") or payload.get("codigo_xml") or payload.get("xml_base64")
             raw_pdf = payload.get("pdf") or payload.get("pdf_base64") or payload.get("danfe") or payload.get("dacte")
 
@@ -239,8 +380,12 @@ def consultar_endpoint_publico(
                 return None, None, str(msg)
 
     elif "xml" in content_type or resp.content.lstrip().startswith(b"<"):
-        # Se a resposta vier diretamente em XML
-        if b"<nfeProc" in resp.content or b"<NFe" in resp.content or b"<cteProc" in resp.content or b"<CTe" in resp.content:
+        if (
+            b"<nfeProc" in resp.content
+            or b"<NFe" in resp.content
+            or b"<cteProc" in resp.content
+            or b"<CTe" in resp.content
+        ):
             xml_bytes = resp.content
 
     if not xml_bytes:
@@ -309,7 +454,7 @@ def extrair_dados_xml(xml_bytes: bytes, modelo: str) -> Dict[str, Any]:
             "tomador": {"modo": "TEXTO", "texto": "NULO"},
         }
 
-    # --- NF-e (55) e NFC-e (65) ---
+    # NF-e (55) e NFC-e (65)
     if modelo in ("55", "65"):
         inf_nfe = _buscar_primeiro(root, "infNFe") or root
         remetente = _extrair_entidade(_buscar_filho(inf_nfe, "emit"))
@@ -328,7 +473,7 @@ def extrair_dados_xml(xml_bytes: bytes, modelo: str) -> Dict[str, Any]:
             },
         }
 
-    # --- CT-e (57) e CT-e OS (67) ---
+    # CT-e (57) e CT-e OS (67)
     inf_cte = _buscar_primeiro(root, "infCte") or root
     rem_elem = _buscar_filho(inf_cte, "rem")
     dest_elem = _buscar_filho(inf_cte, "dest")
@@ -338,7 +483,6 @@ def extrair_dados_xml(xml_bytes: bytes, modelo: str) -> Dict[str, Any]:
     remetente = _extrair_entidade(rem_elem)
     destinatario = _extrair_entidade(dest_elem)
 
-    # Resolução do Tomador do Frete no CT-e
     ide = _buscar_filho(inf_cte, "ide")
     tomador_entidade: Optional[Dict[str, str]] = None
 
@@ -357,7 +501,6 @@ def extrair_dados_xml(xml_bytes: bytes, modelo: str) -> Dict[str, Any]:
         }
         tomador_entidade = _extrair_entidade(mapa_toma_cte.get(codigo_toma or ""))
     else:
-        # CT-e OS (modelo 67) possui a tag <toma> diretamente em <infCte>
         toma_os = _buscar_filho(inf_cte, "toma")
         if toma_os is not None:
             tomador_entidade = _extrair_entidade(toma_os)
