@@ -23,13 +23,16 @@ MODELOS_GEMINI_CANDIDATOS = [
     "gemini-flash-latest",
 ]
 
-# Cache leve em memória para reutilizar direto o primeiro modelo que responder com sucesso
 _CACHE_GEMINI: Dict[str, Tuple[str, str]] = {}
 
-# Endpoints públicos de consulta pela chave de 44 dígitos
+# Endpoints públicos de consulta pela chave de 44 dígitos (NF-e)
 CONSULTA_DANFE_WEB_URL = "https://consultadanfe.com/CDanfe/chave"
 CONSULTA_DANFE_API_URL = "https://consultadanfe.com/api/v1/consulta"
-CONSULTA_DACTE_WEB_URL = "https://consultadacte.com/CDacte/chave"
+
+MENSAGEM_ALERTA_CTE = (
+    "Consulta realizada com sucesso, chave de acesso disponível para cópia. "
+    "A consulta de CT-es para download de XML / PDF exige Certificado Digital A1."
+)
 
 PROMPT_OCR_FISCAL = """
 Você é um especialista em OCR de documentos fiscais brasileiros (DANFE de NF-e/NFC-e e DACTE de CT-e/CT-e OS).
@@ -140,7 +143,6 @@ def _extrair_mensagem_erro_google(resp: requests.Response) -> str:
 
 
 def _descobrir_modelos_aistudio(api_key: str) -> List[str]:
-    """Consulta modelos Flash multimodais ativos na conta caso todos os fixos falhem."""
     try:
         resp = requests.get(
             "https://generativelanguage.googleapis.com/v1beta/models",
@@ -186,7 +188,6 @@ def _descobrir_modelos_aistudio(api_key: str) -> List[str]:
 
 
 def _montar_tentativas_gemini(api_key: str) -> List[Tuple[str, str]]:
-    """Define a ordem de (provedor, modelo) evitando rotas incompatíveis com o prefixo da chave."""
     chave_limpa = api_key.strip()
     eh_vertex = chave_limpa.startswith("AQ.")
     eh_aistudio = chave_limpa.startswith("AIza")
@@ -305,11 +306,9 @@ def extrair_chave_via_gemini(
         if resp.status_code in (500, 502, 503, 504):
             teve_indisponibilidade = True
             continue
-
         if resp.status_code == 429:
             teve_cota = True
             continue
-
         if resp.status_code in (400, 401, 403, 404):
             continue
 
@@ -410,14 +409,12 @@ def _tentar_decodificar_xml(valor: str, session: requests.Session, headers: Dict
     if not texto:
         return None
 
-    # XML cru ou escapado em HTML (&lt;nfeProc...)
     if texto.startswith("<") or "&lt;" in texto[:40]:
         desescapado = html.unescape(texto)
         raw = desescapado.encode("utf-8", errors="ignore")
         if _eh_xml_fiscal(raw):
             return raw
 
-    # URL direta para XML
     if texto.startswith("http://") or texto.startswith("https://"):
         try:
             r = session.get(texto, headers=headers, timeout=12)
@@ -426,7 +423,6 @@ def _tentar_decodificar_xml(valor: str, session: requests.Session, headers: Dict
         except requests.RequestException:
             return None
 
-    # Base64 (com ou sem prefixo data:)
     candidato_b64 = texto.split(",", 1)[1] if texto.startswith("data:") and "," in texto else texto
     if len(candidato_b64) >= 60:
         try:
@@ -467,7 +463,6 @@ def _tentar_decodificar_pdf(valor: str, session: requests.Session, headers: Dict
 def _extrair_de_json_recursivo(
     obj: Any, session: requests.Session, headers: Dict[str, str]
 ) -> Tuple[Optional[bytes], Optional[bytes], Optional[str]]:
-    """Percorre qualquer estrutura JSON para localizar XML, PDF e eventuais mensagens de erro."""
     xml_bytes: Optional[bytes] = None
     pdf_bytes: Optional[bytes] = None
     msg_erro: Optional[str] = None
@@ -480,9 +475,7 @@ def _extrair_de_json_recursivo(
                 k_low = str(k).lower()
                 if isinstance(v, str) and v.strip():
                     if not xml_bytes and (
-                        "xml" in k_low
-                        or v.lstrip().startswith("<")
-                        or "&lt;" in v[:40]
+                        "xml" in k_low or v.lstrip().startswith("<") or "&lt;" in v[:40]
                     ):
                         achado = _tentar_decodificar_xml(v, session, headers)
                         if achado:
@@ -527,7 +520,6 @@ def _extrair_de_json_recursivo(
 def _analisar_resposta_consulta(
     resp: requests.Response, session: requests.Session, headers: Dict[str, str]
 ) -> Tuple[Optional[bytes], Optional[bytes], Optional[str]]:
-    """Extrai (xml_bytes, pdf_bytes, diagnostico) de uma resposta HTTP."""
     content_type = resp.headers.get("Content-Type", "").lower()
 
     if resp.content.lstrip().startswith(b"%PDF"):
@@ -552,7 +544,6 @@ def _analisar_resposta_consulta(
         chaves_json = ", ".join(list(payload.keys())[:6]) if isinstance(payload, dict) else type(payload).__name__
         return None, None, f"HTTP {resp.status_code} sem XML no JSON (chaves: {chaves_json})."
 
-    # Resposta HTML (bloqueio anti-bot, sessão ou rota alterada)
     if "html" in content_type or resp.text.lstrip().startswith("<"):
         if "cloudflare" in resp.text.lower() or "just a moment" in resp.text.lower():
             return None, None, f"HTTP {resp.status_code}: proteção anti-bot (Cloudflare) bloqueou a consulta."
@@ -561,15 +552,8 @@ def _analisar_resposta_consulta(
     return None, None, f"HTTP {resp.status_code} ({content_type or 'sem content-type'})."
 
 
-def consultar_endpoint_publico(
-    chave: str, modelo: str
-) -> Tuple[Optional[bytes], Optional[bytes], Optional[str]]:
-    """
-    Consulta XML e PDF nos endpoints públicos disponíveis:
-    1) ConsultaDanfe web (CDanfe/chave com sessão e cabeçalhos AJAX)
-    2) ConsultaDanfe REST API pública (/api/v1/consulta)
-    3) ConsultaDacte web (fallback específico para CT-e 57/67)
-    """
+def consultar_danfe_publico(chave: str) -> Tuple[Optional[bytes], Optional[bytes], Optional[str]]:
+    """Consulta XML e PDF de NF-e no ConsultaDanfe (rota web + API REST pública v1)."""
     session = requests.Session()
     headers_base = {
         "User-Agent": (
@@ -583,7 +567,6 @@ def consultar_endpoint_publico(
     pdf_final: Optional[bytes] = None
     diagnosticos: List[str] = []
 
-    # Tentativa 1: ConsultaDanfe rota web (CDanfe/chave) com cookies de sessão
     headers_cdanfe = {
         **headers_base,
         "Accept": "application/json, text/javascript, */*; q=0.01",
@@ -615,7 +598,6 @@ def consultar_endpoint_publico(
     except requests.RequestException:
         diagnosticos.append("CDanfe: falha de conexão")
 
-    # Tentativa 2: ConsultaDanfe API REST pública v1 (busca XML/PDF se ainda faltar algum)
     if not xml_final or not pdf_final:
         headers_api = {
             **headers_base,
@@ -642,34 +624,6 @@ def consultar_endpoint_publico(
         except requests.RequestException:
             if not xml_final:
                 diagnosticos.append("API v1: falha de conexão")
-
-    # Tentativa 3: Fallback específico para CT-e (57/67)
-    if not xml_final and modelo in ("57", "67"):
-        headers_dacte = {
-            **headers_base,
-            "Accept": "application/json, text/javascript, */*; q=0.01",
-            "Origin": "https://consultadacte.com",
-            "Referer": "https://consultadacte.com/",
-            "X-Requested-With": "XMLHttpRequest",
-        }
-        try:
-            resp3 = session.post(
-                CONSULTA_DACTE_WEB_URL,
-                data={"chave": chave},
-                headers=headers_dacte,
-                timeout=15,
-            )
-            xml3, pdf3, diag3 = _analisar_resposta_consulta(resp3, session, headers_dacte)
-            if xml3:
-                xml_final = xml3
-            if pdf3 and not pdf_final:
-                pdf_final = pdf3
-            if diag3 and not xml_final:
-                diagnosticos.append(f"CDacte: {diag3}")
-        except requests.Timeout:
-            diagnosticos.append("CDacte: tempo limite excedido")
-        except requests.RequestException:
-            diagnosticos.append("CDacte: falha de conexão")
 
     if xml_final:
         return xml_final, pdf_final, None
@@ -731,8 +685,8 @@ def _extrair_entidade(bloco: Optional[ET.Element]) -> Optional[Dict[str, str]]:
     }
 
 
-def extrair_dados_xml(xml_bytes: bytes, modelo: str) -> Dict[str, Any]:
-    """Lê o XML da NF-e/NFC-e ou CT-e/CT-e OS e retorna Remetente, Destinatário e Tomador."""
+def extrair_dados_xml_nfe(xml_bytes: bytes) -> Dict[str, Any]:
+    """Lê o XML da NF-e/NFC-e e retorna Remetente, Destinatário e Tomador (modFrete)."""
     try:
         root = ET.fromstring(xml_bytes)
     except ET.ParseError:
@@ -742,72 +696,21 @@ def extrair_dados_xml(xml_bytes: bytes, modelo: str) -> Dict[str, Any]:
             "tomador": {"modo": "TEXTO", "texto": "NULO"},
         }
 
-    # NF-e (55) e NFC-e (65)
-    if modelo in ("55", "65"):
-        inf_nfe = _buscar_primeiro(root, "infNFe") or root
-        remetente = _extrair_entidade(_buscar_filho(inf_nfe, "emit"))
-        destinatario = _extrair_entidade(_buscar_filho(inf_nfe, "dest"))
+    inf_nfe = _buscar_primeiro(root, "infNFe") or root
+    remetente = _extrair_entidade(_buscar_filho(inf_nfe, "emit"))
+    destinatario = _extrair_entidade(_buscar_filho(inf_nfe, "dest"))
 
-        transp = _buscar_filho(inf_nfe, "transp")
-        mod_frete = _texto_filho(transp, "modFrete")
-        tomador_texto = MAPA_MOD_FRETE.get(mod_frete or "", "NULO")
-
-        return {
-            "remetente": remetente,
-            "destinatario": destinatario,
-            "tomador": {
-                "modo": "TEXTO",
-                "texto": tomador_texto,
-            },
-        }
-
-    # CT-e (57) e CT-e OS (67)
-    inf_cte = _buscar_primeiro(root, "infCte") or root
-    rem_elem = _buscar_filho(inf_cte, "rem")
-    dest_elem = _buscar_filho(inf_cte, "dest")
-    exped_elem = _buscar_filho(inf_cte, "exped")
-    receb_elem = _buscar_filho(inf_cte, "receb")
-
-    remetente = _extrair_entidade(rem_elem)
-    destinatario = _extrair_entidade(dest_elem)
-
-    ide = _buscar_filho(inf_cte, "ide")
-    tomador_entidade: Optional[Dict[str, str]] = None
-
-    toma3 = _buscar_filho(ide, "toma3") or _buscar_filho(ide, "toma03")
-    toma4 = _buscar_filho(ide, "toma4") or _buscar_filho(ide, "toma04")
-
-    if toma4 is not None:
-        tomador_entidade = _extrair_entidade(toma4)
-    elif toma3 is not None:
-        codigo_toma = _texto_filho(toma3, "toma")
-        mapa_toma_cte = {
-            "0": rem_elem,
-            "1": exped_elem,
-            "2": receb_elem,
-            "3": dest_elem,
-        }
-        tomador_entidade = _extrair_entidade(mapa_toma_cte.get(codigo_toma or ""))
-    else:
-        toma_os = _buscar_filho(inf_cte, "toma")
-        if toma_os is not None:
-            tomador_entidade = _extrair_entidade(toma_os)
-
-    if tomador_entidade:
-        tomador_payload: Dict[str, Any] = {
-            "modo": "ENTIDADE",
-            **tomador_entidade,
-        }
-    else:
-        tomador_payload = {
-            "modo": "TEXTO",
-            "texto": "NULO",
-        }
+    transp = _buscar_filho(inf_nfe, "transp")
+    mod_frete = _texto_filho(transp, "modFrete")
+    tomador_texto = MAPA_MOD_FRETE.get(mod_frete or "", "NULO")
 
     return {
         "remetente": remetente,
         "destinatario": destinatario,
-        "tomador": tomador_payload,
+        "tomador": {
+            "modo": "TEXTO",
+            "texto": tomador_texto,
+        },
     }
 
 
@@ -835,10 +738,12 @@ async def processar_nota(
             },
         )
 
+    mime_type = imagem.content_type or "image/jpeg"
+
     # Etapa 1: OCR Fiscal com Gemini + validação Módulo 11
     chave, erro_leitura = extrair_chave_via_gemini(
         imagem_bytes=imagem_bytes,
-        mime_type=imagem.content_type or "image/jpeg",
+        mime_type=mime_type,
         api_key=gemini_api_key,
     )
 
@@ -854,8 +759,27 @@ async def processar_nota(
     modelo = chave[20:22]
     tipo_documento = MAPA_MODELOS.get(modelo, "NF-e")
 
-    # Etapa 2: Consulta no endpoint público correspondente
-    xml_bytes, pdf_bytes, erro_consulta = consultar_endpoint_publico(chave, modelo)
+    # Fluxo CT-e / CT-e OS (modelos 57 e 67): retorna apenas a chave de acesso + alerta
+    if modelo in ("57", "67"):
+        return JSONResponse(
+            status_code=200,
+            content={
+                "erro_tipo": None,
+                "detail": None,
+                "alerta": MENSAGEM_ALERTA_CTE,
+                "is_cte": True,
+                "chave_acesso": chave,
+                "tipo_documento": tipo_documento,
+                "remetente": None,
+                "destinatario": None,
+                "tomador": None,
+                "xml_base64": None,
+                "pdf_base64": None,
+            },
+        )
+
+    # Fluxo NF-e / NFC-e (modelos 55 e 65): ConsultaDanfe público
+    xml_bytes, pdf_bytes, erro_consulta = consultar_danfe_publico(chave)
 
     if erro_consulta or not xml_bytes:
         return JSONResponse(
@@ -864,6 +788,8 @@ async def processar_nota(
                 "erro_tipo": "CONSULTA",
                 "detail": erro_consulta
                 or "A chave foi lida, mas não foi possível consultar os dados do documento.",
+                "alerta": None,
+                "is_cte": False,
                 "chave_acesso": chave,
                 "tipo_documento": tipo_documento,
                 "remetente": None,
@@ -874,14 +800,15 @@ async def processar_nota(
             },
         )
 
-    # Etapa 3: Extração dos campos diretamente do XML
-    dados_fiscais = extrair_dados_xml(xml_bytes, modelo)
+    dados_fiscais = extrair_dados_xml_nfe(xml_bytes)
 
     return JSONResponse(
         status_code=200,
         content={
             "erro_tipo": None,
             "detail": None,
+            "alerta": None,
+            "is_cte": False,
             "chave_acesso": chave,
             "tipo_documento": tipo_documento,
             "remetente": dados_fiscais["remetente"],
