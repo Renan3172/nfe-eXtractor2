@@ -140,7 +140,7 @@
             id="gemini-key-input"
             type="password"
             autocomplete="off"
-            placeholder="AQ.Ab8RN6..."
+            placeholder="AIzaSy... ou AQ.Ab8RN6..."
             class="neo-input flex-1 min-w-0 sm:w-56 md:w-64 px-3 py-1.5 text-sm font-mono-fiscal bg-[#FDF8F5] border-2 border-black rounded text-black placeholder:text-neutral-500"
           />
           <button
@@ -642,6 +642,11 @@
       return chave.replace(/(.{4})/g, '$1 ').trim();
     }
 
+    function formatarNumeroDocumento(numero) {
+      const limpo = String(numero || '').replace(/\D/g, '').padStart(9, '0').slice(-9);
+      return `N° ${limpo.slice(0, 3)}.${limpo.slice(3, 6)}.${limpo.slice(6, 9)}`;
+    }
+
     function extrairMetadadosDaChaveLocal(chave) {
       if (!chave || chave.length !== 44) return null;
       const modeloCodigo = chave.slice(20, 22);
@@ -665,7 +670,8 @@
         return;
       }
 
-      const texto = `NÚMERO: ${meta.numero} | SÉRIE: ${meta.serie} | MODELO: ${meta.modelo_codigo} (${meta.tipo_documento})`;
+      const numeroFormatado = formatarNumeroDocumento(meta.numero);
+      const texto = `${numeroFormatado} | SÉRIE: ${meta.serie} | MODELO: ${meta.modelo_codigo} (${meta.tipo_documento})`;
       definirCampoTexto('val-documento', texto, false);
       estadoDados.numeroDoc = String(meta.numero);
       document.getElementById('copy-numero').disabled = false;
