@@ -104,7 +104,7 @@
 </head>
 <body class="min-h-screen lg:h-screen lg:overflow-hidden flex flex-col antialiased">
 
-  <div class="w-full max-w-[1600px] mx-auto flex-1 flex flex-col justify-between px-4 sm:px-6 lg:px-8 py-4 lg:py-6 gap-4 lg:gap-5">
+  <div class="w-full max-w-[1600px] mx-auto flex-1 flex flex-col justify-between px-4 sm:px-6 lg:px-8 py-4 lg:py-5 gap-4">
 
     <!-- CABEÇALHO -->
     <header class="flex flex-col lg:flex-row lg:items-center justify-between gap-3 shrink-0">
@@ -183,7 +183,7 @@
     <main class="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-5 lg:gap-7 min-h-0">
 
       <!-- COLUNA ESQUERDA: Upload, Ação, Caixa de Erro/Alerta e Disclaimer -->
-      <section class="lg:col-span-6 flex flex-col gap-4 min-h-0">
+      <section class="lg:col-span-6 flex flex-col gap-3.5 min-h-0">
 
         <div
           id="dropzone"
@@ -240,16 +240,17 @@
           ENVIAR FOTO / EXTRAIR DOCUMENTO
         </button>
 
-        <!-- Caixa de Erros / Alertas (INVISÍVEL por padrão; coral para erro, amarelo para alerta CT-e) -->
+        <!-- Caixa de Erros / Alertas (invisível por padrão; coral para erro, amarelo para alerta CT-e) -->
         <div
           id="error-box"
           role="alert"
-          class="hidden neo-badge bg-[#FF3366] text-black px-4 py-3 text-xs sm:text-sm font-bold leading-snug shrink-0 break-words"
+          style="display: none;"
+          class="neo-badge bg-[#FF3366] text-black px-4 py-3 text-xs sm:text-sm font-bold leading-snug shrink-0 break-words"
         >
           <span id="error-text"></span>
         </div>
 
-        <div class="neo-card bg-white px-4 py-3.5 shrink-0">
+        <div class="neo-card bg-white px-4 py-3 shrink-0">
           <h2 class="text-xs sm:text-sm font-bold uppercase tracking-wide text-black">
             AVISO / DISCLAIMER
           </h2>
@@ -261,12 +262,12 @@
       </section>
 
       <!-- COLUNA DIREITA: Resultados Fiscais e Downloads -->
-      <section class="lg:col-span-6 flex flex-col justify-between gap-4 min-h-0">
+      <section class="lg:col-span-6 flex flex-col justify-between gap-3.5 min-h-0">
 
-        <div class="flex flex-col gap-3.5 flex-1 justify-center">
+        <div class="flex flex-col gap-3 flex-1 justify-center">
 
           <!-- CARD 1: CHAVE DE ACESSO -->
-          <article class="neo-card bg-white px-4 py-3.5 flex items-center justify-between gap-4">
+          <article class="neo-card bg-white px-4 py-3 flex items-center justify-between gap-4">
             <div class="min-w-0 flex-1">
               <div class="flex items-center gap-2 flex-wrap">
                 <h2 class="text-sm sm:text-base font-bold uppercase tracking-tight text-black">
@@ -274,13 +275,15 @@
                 </h2>
                 <span
                   id="badge-tipo-doc"
-                  class="hidden text-[11px] font-mono-fiscal font-bold uppercase px-2 py-0.5 border-2 border-black rounded bg-[#FFE600] text-black"
+                  style="display: none;"
+                  class="text-[11px] font-mono-fiscal font-bold uppercase px-2 py-0.5 border-2 border-black rounded bg-[#FFE600] text-black leading-none"
                 ></span>
                 <span
                   id="badge-alerta-cte"
-                  class="hidden text-[11px] font-mono-fiscal font-bold uppercase px-2 py-0.5 border-2 border-black rounded bg-[#FF3366] text-black"
+                  style="display: none;"
+                  class="text-[11px] font-mono-fiscal font-bold uppercase px-2 py-0.5 border-2 border-black rounded bg-[#FF3366] text-black leading-none"
                 >
-                  RECOMENDADO CONFERÊNCIA DE DADOS
+                  RECOMENDADA CONFERÊNCIA DE DADOS
                 </span>
               </div>
               <p
@@ -301,8 +304,32 @@
             </button>
           </article>
 
-          <!-- CARD 2: REMETENTE -->
-          <article class="neo-card bg-white px-4 py-3.5 flex items-center justify-between gap-4">
+          <!-- CARD 2: DADOS DO DOCUMENTO (NÚMERO, SÉRIE E MODELO) -->
+          <article class="neo-card bg-white px-4 py-3 flex items-center justify-between gap-4">
+            <div class="min-w-0 flex-1">
+              <h2 class="text-sm sm:text-base font-bold uppercase tracking-tight text-black">
+                DADOS DO DOCUMENTO
+              </h2>
+              <p
+                id="val-documento"
+                class="font-mono-fiscal text-xs sm:text-sm font-bold text-neutral-600 mt-1 break-words leading-snug"
+              >
+                AGUARDANDO DOCUMENTO...
+              </p>
+            </div>
+            <button
+              type="button"
+              id="copy-numero"
+              disabled
+              onclick="copiarTexto('numero')"
+              class="neo-copy-btn bg-black text-white px-4 py-2 text-xs font-bold uppercase tracking-wider shrink-0 min-h-[40px] cursor-pointer"
+            >
+              COPIAR
+            </button>
+          </article>
+
+          <!-- CARD 3: REMETENTE -->
+          <article class="neo-card bg-white px-4 py-3 flex items-center justify-between gap-4">
             <div class="min-w-0 flex-1">
               <h2 class="text-sm sm:text-base font-bold uppercase tracking-tight text-black">
                 REMETENTE
@@ -322,8 +349,8 @@
             </button>
           </article>
 
-          <!-- CARD 3: DESTINATÁRIO -->
-          <article class="neo-card bg-white px-4 py-3.5 flex items-center justify-between gap-4">
+          <!-- CARD 4: DESTINATÁRIO -->
+          <article class="neo-card bg-white px-4 py-3 flex items-center justify-between gap-4">
             <div class="min-w-0 flex-1">
               <h2 class="text-sm sm:text-base font-bold uppercase tracking-tight text-black">
                 DESTINATÁRIO
@@ -343,8 +370,8 @@
             </button>
           </article>
 
-          <!-- CARD 4: TOMADOR DO FRETE -->
-          <article class="neo-card bg-white px-4 py-3.5 flex items-center justify-between gap-4">
+          <!-- CARD 5: TOMADOR DO FRETE -->
+          <article class="neo-card bg-white px-4 py-3 flex items-center justify-between gap-4">
             <div class="min-w-0 flex-1">
               <h2 class="text-sm sm:text-base font-bold uppercase tracking-tight text-black">
                 TOMADOR DO FRETE
@@ -403,10 +430,18 @@
   <script>
     const STORAGE_KEY_GEMINI = 'nfextractor2_gemini_api_key';
 
+    const MAPA_MODELOS_JS = {
+      '55': 'NF-e',
+      '65': 'NFC-e',
+      '57': 'CT-e',
+      '67': 'CT-e OS'
+    };
+
     let arquivoSelecionado = null;
 
     const estadoDados = {
       chave: '',
+      numeroDoc: '',
       remetenteCnpj: '',
       destinatarioCnpj: '',
       tomadorCnpj: '',
@@ -584,24 +619,22 @@
     function exibirErro(mensagem) {
       const box = document.getElementById('error-box');
       const text = document.getElementById('error-text');
-      box.classList.remove('bg-[#FFE600]');
-      box.classList.add('bg-[#FF3366]');
+      box.style.backgroundColor = '#FF3366';
       text.textContent = mensagem;
-      box.classList.remove('hidden');
+      box.style.display = 'block';
     }
 
     function exibirAlerta(mensagem) {
       const box = document.getElementById('error-box');
       const text = document.getElementById('error-text');
-      box.classList.remove('bg-[#FF3366]');
-      box.classList.add('bg-[#FFE600]');
+      box.style.backgroundColor = '#FFE600';
       text.textContent = mensagem;
-      box.classList.remove('hidden');
+      box.style.display = 'block';
     }
 
     function ocultarFeedback() {
       const box = document.getElementById('error-box');
-      box.classList.add('hidden');
+      box.style.display = 'none';
       document.getElementById('error-text').textContent = '';
     }
 
@@ -609,8 +642,38 @@
       return chave.replace(/(.{4})/g, '$1 ').trim();
     }
 
+    function extrairMetadadosDaChaveLocal(chave) {
+      if (!chave || chave.length !== 44) return null;
+      const modeloCodigo = chave.slice(20, 22);
+      const serie = String(parseInt(chave.slice(22, 25), 10));
+      const numero = String(parseInt(chave.slice(25, 34), 10));
+      const tipoDocumento = MAPA_MODELOS_JS[modeloCodigo] || 'NF-e';
+      return {
+        numero,
+        serie,
+        modelo_codigo: modeloCodigo,
+        tipo_documento: tipoDocumento
+      };
+    }
+
+    function renderizarDadosDocumento(documentoObj, chave) {
+      const meta = documentoObj || extrairMetadadosDaChaveLocal(chave);
+      if (!meta || !meta.numero) {
+        definirCampoTexto('val-documento', 'NULO', false);
+        estadoDados.numeroDoc = '';
+        document.getElementById('copy-numero').disabled = true;
+        return;
+      }
+
+      const texto = `NÚMERO: ${meta.numero} | SÉRIE: ${meta.serie} | MODELO: ${meta.modelo_codigo} (${meta.tipo_documento})`;
+      definirCampoTexto('val-documento', texto, false);
+      estadoDados.numeroDoc = String(meta.numero);
+      document.getElementById('copy-numero').disabled = false;
+    }
+
     function limparEstadoResultado(modo) {
       estadoDados.chave = '';
+      estadoDados.numeroDoc = '';
       estadoDados.remetenteCnpj = '';
       estadoDados.destinatarioCnpj = '';
       estadoDados.tomadorCnpj = '';
@@ -618,24 +681,27 @@
       estadoDados.pdfBase64 = '';
 
       const badgeTipo = document.getElementById('badge-tipo-doc');
-      badgeTipo.classList.add('hidden');
+      badgeTipo.style.display = 'none';
       badgeTipo.textContent = '';
 
-      document.getElementById('badge-alerta-cte').classList.add('hidden');
+      document.getElementById('badge-alerta-cte').style.display = 'none';
 
       if (modo === 'PROCESSANDO') {
         definirCampoTexto('val-chave', 'LENDO CHAVE E CONSULTANDO DOCUMENTO...', true);
+        definirCampoTexto('val-documento', 'PROCESSANDO...', true);
         definirCampoTexto('val-remetente', 'PROCESSANDO...', true);
         definirCampoTexto('val-destinatario', 'PROCESSANDO...', true);
         definirCampoTexto('val-tomador', 'PROCESSANDO...', true);
       } else if (modo === 'ERRO_LEITURA') {
         definirCampoTexto('val-chave', 'LEITURA FALHOU', false);
+        definirCampoTexto('val-documento', 'AGUARDANDO DOCUMENTO...', true);
         definirCampoTexto('val-remetente', 'AGUARDANDO DOCUMENTO...', true);
         definirCampoTexto('val-destinatario', 'AGUARDANDO DOCUMENTO...', true);
         definirCampoTexto('val-tomador', 'AGUARDANDO DOCUMENTO...', true);
       }
 
       document.getElementById('copy-chave').disabled = true;
+      document.getElementById('copy-numero').disabled = true;
       document.getElementById('copy-remetente').disabled = true;
       document.getElementById('copy-destinatario').disabled = true;
       document.getElementById('copy-tomador').disabled = true;
@@ -712,20 +778,26 @@
           return;
         }
 
-        // Exibe tipo do documento e chave de acesso
+        // Preenche Chave de Acesso e Dados do Documento (Número, Série e Modelo)
+        estadoDados.chave = data.chave_acesso || '';
+        const modeloChave = estadoDados.chave.length === 44 ? estadoDados.chave.slice(20, 22) : '';
+        const ehCte = Boolean(data.is_cte) || modeloChave === '57' || modeloChave === '67';
+
         const badgeTipo = document.getElementById('badge-tipo-doc');
-        if (data.tipo_documento) {
-          badgeTipo.textContent = data.tipo_documento;
-          badgeTipo.classList.remove('hidden');
+        const tipoTexto = data.tipo_documento || MAPA_MODELOS_JS[modeloChave] || '';
+        if (tipoTexto) {
+          badgeTipo.textContent = tipoTexto;
+          badgeTipo.style.display = 'inline-flex';
         }
 
-        estadoDados.chave = data.chave_acesso || '';
         definirCampoTexto('val-chave', formatarChaveVisual(estadoDados.chave), false);
         document.getElementById('copy-chave').disabled = !estadoDados.chave;
 
-        // Caso específico CT-e / CT-e OS: apenas chave copiável + selo coral + alerta amarelo
-        if (data.is_cte) {
-          document.getElementById('badge-alerta-cte').classList.remove('hidden');
+        renderizarDadosDocumento(data.documento, estadoDados.chave);
+
+        // Caso específico CT-e / CT-e OS: chave + dados do documento + selo coral + alerta amarelo
+        if (ehCte) {
+          document.getElementById('badge-alerta-cte').style.display = 'inline-flex';
 
           definirCampoTexto('val-remetente', 'INDISPONÍVEL PARA CT-e', false);
           definirCampoTexto('val-destinatario', 'INDISPONÍVEL PARA CT-e', false);
@@ -737,13 +809,14 @@
           document.getElementById('btn-xml').disabled = true;
           document.getElementById('btn-pdf').disabled = true;
 
-          if (data.alerta) {
-            exibirAlerta(data.alerta);
-          }
+          exibirAlerta(
+            data.alerta ||
+            'Consulta realizada com sucesso, chave de acesso disponível para cópia. A consulta de CT-es para download de XML / PDF exige Certificado Digital A1.'
+          );
           return;
         }
 
-        // Caso 2: Erro na consulta pública de NF-e (mantém chave copiável)
+        // Caso 2: Erro na consulta pública de NF-e (mantém chave e número/série/modelo disponíveis)
         if (data.erro_tipo === 'CONSULTA') {
           definirCampoTexto('val-remetente', 'INDISPONÍVEL (ERRO NA CONSULTA)', false);
           definirCampoTexto('val-destinatario', 'INDISPONÍVEL (ERRO NA CONSULTA)', false);
@@ -791,6 +864,7 @@
     function copiarTexto(campo) {
       const mapaValores = {
         chave: { valor: estadoDados.chave, btnId: 'copy-chave' },
+        numero: { valor: estadoDados.numeroDoc, btnId: 'copy-numero' },
         remetente: { valor: estadoDados.remetenteCnpj, btnId: 'copy-remetente' },
         destinatario: { valor: estadoDados.destinatarioCnpj, btnId: 'copy-destinatario' },
         tomador: { valor: estadoDados.tomadorCnpj, btnId: 'copy-tomador' }
