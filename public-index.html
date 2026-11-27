@@ -1,0 +1,807 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NF-eXtractor 2</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --neo-bg: #FDF8F5;
+      --neo-surface: #FFFFFF;
+      --neo-ink: #000000;
+      --neo-yellow: #FFE600;
+      --neo-mint: #7DF9A6;
+      --neo-cyan: #38BDF8;
+      --neo-coral: #FF3366;
+    }
+
+    body {
+      background-color: var(--neo-bg);
+      color: var(--neo-ink);
+      font-family: 'Space Grotesk', system-ui, -apple-system, sans-serif;
+    }
+
+    .font-mono-fiscal {
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    .neo-card {
+      background-color: var(--neo-surface);
+      border: 3px solid var(--neo-ink);
+      border-radius: 8px;
+      box-shadow: 6px 6px 0px var(--neo-ink);
+    }
+
+    .neo-badge {
+      border: 3px solid var(--neo-ink);
+      border-radius: 8px;
+      box-shadow: 4px 4px 0px var(--neo-ink);
+    }
+
+    .neo-btn {
+      border: 3px solid var(--neo-ink);
+      border-radius: 8px;
+      box-shadow: 4px 4px 0px var(--neo-ink);
+      transition: transform 80ms linear, box-shadow 80ms linear;
+      user-select: none;
+    }
+
+    .neo-btn:hover:not(:disabled) {
+      transform: translate(-1px, -1px);
+      box-shadow: 5px 5px 0px var(--neo-ink);
+    }
+
+    .neo-btn:active:not(:disabled) {
+      transform: translate(4px, 4px);
+      box-shadow: 0px 0px 0px var(--neo-ink);
+    }
+
+    .neo-btn:focus-visible,
+    .neo-input:focus-visible {
+      outline: 3px solid var(--neo-ink);
+      outline-offset: 4px;
+    }
+
+    .neo-btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+      transform: none;
+      box-shadow: 2px 2px 0px var(--neo-ink);
+    }
+
+    .neo-copy-btn {
+      border: 2px solid var(--neo-ink);
+      border-radius: 6px;
+      transition: transform 80ms linear, background-color 80ms linear;
+      user-select: none;
+    }
+
+    .neo-copy-btn:active:not(:disabled) {
+      transform: translate(2px, 2px);
+    }
+
+    .neo-copy-btn:disabled {
+      opacity: 0.35;
+      cursor: not-allowed;
+    }
+
+    /* Gaveta retrátil de API abrindo suavemente para a esquerda no desktop */
+    .api-drawer {
+      transition: max-width 220ms ease, opacity 180ms ease;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .neo-btn,
+      .neo-copy-btn,
+      .api-drawer {
+        transition: none;
+      }
+    }
+  </style>
+</head>
+<body class="min-h-screen lg:h-screen lg:overflow-hidden flex flex-col antialiased">
+
+  <div class="w-full max-w-[1600px] mx-auto flex-1 flex flex-col justify-between px-4 sm:px-6 lg:px-8 py-4 lg:py-6 gap-4 lg:gap-5">
+
+    <!-- CABEÇALHO -->
+    <header class="flex flex-col lg:flex-row lg:items-center justify-between gap-3 shrink-0">
+      <!-- Bloco do Título (protegido contra sobreposição) -->
+      <div class="flex items-center justify-between lg:justify-start gap-3 shrink-0">
+        <div class="neo-card px-5 py-2.5 bg-white inline-flex items-center">
+          <h1 class="text-2xl sm:text-3xl font-bold tracking-tight text-black leading-none">
+            NF-eXtractor 2
+          </h1>
+        </div>
+
+        <!-- Botão Configurar API visível ao lado no mobile -->
+        <button
+          type="button"
+          onclick="toggleConfigApi()"
+          class="lg:hidden neo-btn bg-white px-3.5 py-2.5 text-xs font-bold uppercase tracking-wider text-black inline-flex items-center gap-2 min-h-[44px]"
+        >
+          <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+            <circle cx="12" cy="12" r="3" />
+          </svg>
+          <span>Configurar API</span>
+        </button>
+      </div>
+
+      <!-- Controles de API à direita (Gaveta retrátil abrindo para a esquerda sem encostar no título) -->
+      <div class="flex flex-col sm:flex-row items-stretch sm:items-center justify-end gap-3 lg:max-w-[72%] min-w-0">
+
+        <!-- Gaveta Retrátil de Chave Gemini (aberta no 1o acesso) -->
+        <div
+          id="api-drawer"
+          class="hidden neo-badge bg-white px-3 py-1.5 flex flex-col sm:flex-row items-stretch sm:items-center gap-2 min-w-0"
+        >
+          <label for="gemini-key-input" class="sr-only">Google Gemini API Key</label>
+          <input
+            id="gemini-key-input"
+            type="password"
+            autocomplete="off"
+            placeholder="AQ.Ab8RN6..."
+            class="neo-input flex-1 min-w-0 sm:w-56 md:w-64 px-3 py-1.5 text-sm font-mono-fiscal bg-[#FDF8F5] border-2 border-black rounded text-black placeholder:text-neutral-500"
+          />
+          <button
+            type="button"
+            onclick="salvarChaveApi()"
+            class="neo-copy-btn bg-black text-white px-4 py-2 text-xs font-bold uppercase tracking-wider hover:bg-neutral-800 shrink-0 cursor-pointer"
+          >
+            Salvar Chave
+          </button>
+        </div>
+
+        <!-- Status API Gemini -->
+        <div
+          id="status-api-badge"
+          class="neo-badge bg-[#FFE600] px-4 py-2.5 inline-flex items-center justify-center gap-2.5 shrink-0 min-h-[46px]"
+        >
+          <span id="status-api-dot" class="w-3 h-3 rounded-full border-2 border-black bg-black shrink-0"></span>
+          <span id="status-api-text" class="text-xs sm:text-sm font-bold uppercase tracking-wide text-black whitespace-nowrap">
+            STATUS API GEMINI: PENDENTE
+          </span>
+        </div>
+
+        <!-- Botão Configurar API (Desktop) -->
+        <button
+          type="button"
+          id="btn-config-api"
+          onclick="toggleConfigApi()"
+          class="hidden lg:inline-flex neo-btn bg-white px-4 py-2.5 text-sm font-bold text-black items-center gap-2 shrink-0 min-h-[46px] cursor-pointer"
+        >
+          <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+            <circle cx="12" cy="12" r="3" />
+          </svg>
+          <span>Configurar API</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- CORPO PRINCIPAL (2 colunas no desktop 1080p, 1 coluna no mobile) -->
+    <main class="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-5 lg:gap-7 min-h-0">
+
+      <!-- COLUNA ESQUERDA: Upload, Ação, Erro Condicional e Disclaimer -->
+      <section class="lg:col-span-6 flex flex-col gap-4 min-h-0">
+
+        <!-- Área de Digitalização / Dropzone -->
+        <div
+          id="dropzone"
+          tabindex="0"
+          role="button"
+          aria-label="Selecionar ou colar foto do documento fiscal"
+          onclick="document.getElementById('file-input').click()"
+          onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();document.getElementById('file-input').click();}"
+          class="flex-1 min-h-[210px] lg:min-h-0 bg-white border-[3px] border-dashed border-black rounded-lg p-5 flex flex-col items-center justify-center text-center cursor-pointer hover:bg-[#FFFDF5] transition-colors relative overflow-hidden"
+        >
+          <input
+            type="file"
+            id="file-input"
+            accept="image/*"
+            class="hidden"
+            onchange="selecionarArquivo(event)"
+          />
+
+          <div id="dropzone-placeholder" class="flex flex-col items-center justify-center gap-3">
+            <div class="w-14 h-14 border-[3px] border-black rounded-lg bg-[#FDF8F5] flex items-center justify-center">
+              <svg class="w-8 h-8 text-black" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24">
+                <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                <circle cx="8.5" cy="8.5" r="1.5" fill="currentColor" />
+                <path stroke-linecap="round" stroke-linejoin="round" d="M21 15l-5-5L5 21" />
+              </svg>
+            </div>
+            <div class="space-y-1">
+              <p class="text-base sm:text-lg font-bold text-black leading-snug">
+                Clique para selecionar a foto para digitalização<br class="hidden sm:inline" />
+                ou pressione <kbd class="px-1.5 py-0.5 bg-[#FDF8F5] border-2 border-black rounded text-sm font-mono-fiscal">Ctrl + V</kbd>
+              </p>
+              <p class="text-xs sm:text-sm font-medium text-neutral-700">
+                Suporta NF-e e CT-e em JPG, PNG ou WEBP enviadas pelo WhatsApp
+              </p>
+            </div>
+          </div>
+
+          <!-- Preview da imagem carregada -->
+          <div id="preview-wrapper" class="hidden w-full h-full flex flex-col items-center justify-center gap-2">
+            <img
+              id="preview-img"
+              alt="Prévia do documento selecionado"
+              class="max-h-[240px] lg:max-h-[300px] max-w-full object-contain border-2 border-black rounded"
+            />
+            <span id="preview-filename" class="text-xs font-mono-fiscal font-bold text-black bg-[#FDF8F5] border-2 border-black px-2.5 py-0.5 rounded max-w-full truncate"></span>
+          </div>
+        </div>
+
+        <!-- Botão Principal -->
+        <button
+          type="button"
+          id="btn-processar"
+          onclick="enviarDocumento()"
+          class="neo-btn w-full bg-[#FFE600] text-black font-bold text-sm sm:text-base uppercase tracking-wider py-3.5 px-6 shrink-0 cursor-pointer"
+        >
+          ENVIAR FOTO / EXTRAIR DOCUMENTO
+        </button>
+
+        <!-- Caixa de Erros (INVISÍVEL por padrão; aparece apenas em caso de erro, sem emojis) -->
+        <div
+          id="error-box"
+          role="alert"
+          class="hidden neo-badge bg-[#FF3366] text-black px-4 py-3 text-xs sm:text-sm font-bold leading-snug shrink-0 break-words"
+        >
+          <span id="error-text"></span>
+        </div>
+
+        <!-- Aviso / Disclaimer (bordas e sombra completas) -->
+        <div class="neo-card bg-white px-4 py-3.5 shrink-0">
+          <h2 class="text-xs sm:text-sm font-bold uppercase tracking-wide text-black">
+            AVISO / DISCLAIMER
+          </h2>
+          <p class="text-xs sm:text-sm font-medium text-black leading-snug mt-1">
+            A IA pode cometer erros de leitura. Sempre verifique todos os dados e os arquivos XML / PDF recebidos antes de utilizá-los em produção.
+          </p>
+        </div>
+
+      </section>
+
+      <!-- COLUNA DIREITA: Resultados Fiscais e Downloads -->
+      <section class="lg:col-span-6 flex flex-col justify-between gap-4 min-h-0">
+
+        <div class="flex flex-col gap-3.5 flex-1 justify-center">
+
+          <!-- CARD 1: CHAVE DE ACESSO -->
+          <article class="neo-card bg-white px-4 py-3.5 flex items-center justify-between gap-4">
+            <div class="min-w-0 flex-1">
+              <div class="flex items-center gap-2 flex-wrap">
+                <h2 class="text-sm sm:text-base font-bold uppercase tracking-tight text-black">
+                  CHAVE DE ACESSO RETORNADA:
+                </h2>
+                <span
+                  id="badge-tipo-doc"
+                  class="hidden text-[11px] font-mono-fiscal font-bold uppercase px-2 py-0.5 border-2 border-black rounded bg-[#FFE600] text-black"
+                ></span>
+              </div>
+              <p
+                id="val-chave"
+                class="font-mono-fiscal text-xs sm:text-sm font-bold text-neutral-600 mt-1 break-all"
+              >
+                AGUARDANDO DOCUMENTO...
+              </p>
+            </div>
+            <button
+              type="button"
+              id="copy-chave"
+              disabled
+              onclick="copiarTexto('chave')"
+              class="neo-copy-btn bg-black text-white px-4 py-2 text-xs font-bold uppercase tracking-wider shrink-0 min-h-[40px] cursor-pointer"
+            >
+              COPIAR
+            </button>
+          </article>
+
+          <!-- CARD 2: REMETENTE -->
+          <article class="neo-card bg-white px-4 py-3.5 flex items-center justify-between gap-4">
+            <div class="min-w-0 flex-1">
+              <h2 class="text-sm sm:text-base font-bold uppercase tracking-tight text-black">
+                REMETENTE
+              </h2>
+              <p id="val-remetente" class="text-xs sm:text-sm font-semibold text-neutral-600 mt-1 break-words leading-snug">
+                AGUARDANDO DOCUMENTO...
+              </p>
+            </div>
+            <button
+              type="button"
+              id="copy-remetente"
+              disabled
+              onclick="copiarTexto('remetente')"
+              class="neo-copy-btn bg-black text-white px-4 py-2 text-xs font-bold uppercase tracking-wider shrink-0 min-h-[40px] cursor-pointer"
+            >
+              COPIAR
+            </button>
+          </article>
+
+          <!-- CARD 3: DESTINATÁRIO -->
+          <article class="neo-card bg-white px-4 py-3.5 flex items-center justify-between gap-4">
+            <div class="min-w-0 flex-1">
+              <h2 class="text-sm sm:text-base font-bold uppercase tracking-tight text-black">
+                DESTINATÁRIO
+              </h2>
+              <p id="val-destinatario" class="text-xs sm:text-sm font-semibold text-neutral-600 mt-1 break-words leading-snug">
+                AGUARDANDO DOCUMENTO...
+              </p>
+            </div>
+            <button
+              type="button"
+              id="copy-destinatario"
+              disabled
+              onclick="copiarTexto('destinatario')"
+              class="neo-copy-btn bg-black text-white px-4 py-2 text-xs font-bold uppercase tracking-wider shrink-0 min-h-[40px] cursor-pointer"
+            >
+              COPIAR
+            </button>
+          </article>
+
+          <!-- CARD 4: TOMADOR DO FRETE -->
+          <article class="neo-card bg-white px-4 py-3.5 flex items-center justify-between gap-4">
+            <div class="min-w-0 flex-1">
+              <h2 class="text-sm sm:text-base font-bold uppercase tracking-tight text-black">
+                TOMADOR DO FRETE
+              </h2>
+              <p id="val-tomador" class="text-xs sm:text-sm font-semibold text-neutral-600 mt-1 break-words leading-snug">
+                AGUARDANDO DOCUMENTO...
+              </p>
+            </div>
+            <button
+              type="button"
+              id="copy-tomador"
+              disabled
+              onclick="copiarTexto('tomador')"
+              class="neo-copy-btn bg-black text-white px-4 py-2 text-xs font-bold uppercase tracking-wider shrink-0 min-h-[40px] cursor-pointer"
+            >
+              COPIAR
+            </button>
+          </article>
+
+        </div>
+
+        <!-- Botões de Download (Ação secundária manual) -->
+        <div class="flex flex-col sm:flex-row items-stretch sm:items-center justify-end gap-3 shrink-0">
+          <button
+            type="button"
+            id="btn-xml"
+            disabled
+            onclick="baixarArquivo('xml')"
+            class="neo-btn bg-[#7DF9A6] text-black font-bold text-sm uppercase tracking-wider px-6 py-3 min-h-[46px] cursor-pointer"
+          >
+            Baixar XML
+          </button>
+          <button
+            type="button"
+            id="btn-pdf"
+            disabled
+            onclick="baixarArquivo('pdf')"
+            class="neo-btn bg-[#38BDF8] text-black font-bold text-sm uppercase tracking-wider px-6 py-3 min-h-[46px] cursor-pointer"
+          >
+            Baixar PDF
+          </button>
+        </div>
+
+      </section>
+    </main>
+
+    <!-- RODAPÉ -->
+    <footer class="flex items-center justify-start shrink-0 pt-1">
+      <div class="neo-badge bg-white px-4 py-2 text-xs sm:text-sm font-bold text-black">
+        Desenvolvido por: Renan Oteka
+      </div>
+    </footer>
+
+  </div>
+
+  <script>
+    const STORAGE_KEY_GEMINI = 'nfextractor2_gemini_api_key';
+
+    let arquivoSelecionado = null;
+
+    const estadoDados = {
+      chave: '',
+      remetenteCnpj: '',
+      destinatarioCnpj: '',
+      tomadorCnpj: '',
+      xmlBase64: '',
+      pdfBase64: ''
+    };
+
+    // Inicialização da página
+    window.addEventListener('DOMContentLoaded', () => {
+      const chaveSalva = localStorage.getItem(STORAGE_KEY_GEMINI) || '';
+      document.getElementById('gemini-key-input').value = chaveSalva;
+      atualizarStatusApi(chaveSalva);
+
+      // No primeiro acesso (sem chave salva), abre automaticamente o campo de configuração inicial
+      if (!chaveSalva) {
+        document.getElementById('api-drawer').classList.remove('hidden');
+      }
+    });
+
+    function atualizarStatusApi(chave) {
+      const badge = document.getElementById('status-api-badge');
+      const dot = document.getElementById('status-api-dot');
+      const text = document.getElementById('status-api-text');
+
+      if (chave && chave.trim().length > 0) {
+        badge.classList.remove('bg-[#FFE600]');
+        badge.classList.add('bg-[#7DF9A6]');
+        dot.classList.remove('bg-black');
+        dot.classList.add('bg-[#008A3A]');
+        text.textContent = 'STATUS API GEMINI: OK';
+      } else {
+        badge.classList.remove('bg-[#7DF9A6]');
+        badge.classList.add('bg-[#FFE600]');
+        dot.classList.remove('bg-[#008A3A]');
+        dot.classList.add('bg-black');
+        text.textContent = 'STATUS API GEMINI: PENDENTE';
+      }
+    }
+
+    function toggleConfigApi() {
+      const drawer = document.getElementById('api-drawer');
+      drawer.classList.toggle('hidden');
+      if (!drawer.classList.contains('hidden')) {
+        document.getElementById('gemini-key-input').focus();
+      }
+    }
+
+    function salvarChaveApi() {
+      const input = document.getElementById('gemini-key-input');
+      const chave = input.value.trim();
+
+      if (chave) {
+        localStorage.setItem(STORAGE_KEY_GEMINI, chave);
+        document.getElementById('api-drawer').classList.add('hidden');
+        ocultarErro();
+      } else {
+        localStorage.removeItem(STORAGE_KEY_GEMINI);
+      }
+
+      atualizarStatusApi(chave);
+    }
+
+    // Enter no input da chave salva automaticamente
+    document.getElementById('gemini-key-input').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        salvarChaveApi();
+      }
+    });
+
+    // Suporte a Ctrl + V global (WhatsApp Web, print screen, arquivos copiados)
+    document.addEventListener('paste', (e) => {
+      if (document.activeElement && document.activeElement.id === 'gemini-key-input') {
+        return;
+      }
+
+      const clipboard = e.clipboardData || window.clipboardData;
+      if (!clipboard) return;
+
+      if (clipboard.files && clipboard.files.length > 0) {
+        const file = clipboard.files[0];
+        if (file.type.startsWith('image/')) {
+          e.preventDefault();
+          carregarImagem(file);
+          return;
+        }
+      }
+
+      if (clipboard.items) {
+        for (let i = 0; i < clipboard.items.length; i++) {
+          const item = clipboard.items[i];
+          if (item.type.startsWith('image/')) {
+            const blob = item.getAsFile();
+            if (blob) {
+              e.preventDefault();
+              carregarImagem(blob);
+              return;
+            }
+          }
+        }
+      }
+    });
+
+    // Suporte a arrastar e soltar (Drag & Drop)
+    const dropzone = document.getElementById('dropzone');
+    dropzone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      dropzone.classList.add('bg-[#FFE600]/20');
+    });
+    dropzone.addEventListener('dragleave', () => {
+      dropzone.classList.remove('bg-[#FFE600]/20');
+    });
+    dropzone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropzone.classList.remove('bg-[#FFE600]/20');
+      if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+        const file = e.dataTransfer.files[0];
+        if (file.type.startsWith('image/')) {
+          carregarImagem(file);
+        }
+      }
+    });
+
+    function selecionarArquivo(event) {
+      if (event.target.files && event.target.files.length > 0) {
+        carregarImagem(event.target.files[0]);
+      }
+    }
+
+    function carregarImagem(file) {
+      arquivoSelecionado = file;
+      ocultarErro();
+
+      const previewImg = document.getElementById('preview-img');
+      const placeholder = document.getElementById('dropzone-placeholder');
+      const wrapper = document.getElementById('preview-wrapper');
+      const filenameLabel = document.getElementById('preview-filename');
+
+      previewImg.src = URL.createObjectURL(file);
+      filenameLabel.textContent = file.name || 'Imagem colada da área de transferência';
+      placeholder.classList.add('hidden');
+      wrapper.classList.remove('hidden');
+    }
+
+    // Otimiza imagens muito grandes antes do envio para manter a resposta rápida e evitar limite de 4,5 MB da Vercel
+    async function prepararImagemParaEnvio(file) {
+      const MAX_DIM = 1800;
+      const MAX_BYTES = 2.5 * 1024 * 1024;
+
+      if (file.size <= MAX_BYTES) {
+        return file;
+      }
+
+      return new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => {
+          let { width, height } = img;
+          if (width > MAX_DIM || height > MAX_DIM) {
+            const ratio = Math.min(MAX_DIM / width, MAX_DIM / height);
+            width = Math.round(width * ratio);
+            height = Math.round(height * ratio);
+          }
+
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, width, height);
+
+          canvas.toBlob(
+            (blob) => resolve(blob || file),
+            'image/jpeg',
+            0.88
+          );
+        };
+        img.onerror = () => resolve(file);
+        img.src = URL.createObjectURL(file);
+      });
+    }
+
+    function exibirErro(mensagem) {
+      const box = document.getElementById('error-box');
+      const text = document.getElementById('error-text');
+      text.textContent = mensagem;
+      box.classList.remove('hidden');
+    }
+
+    function ocultarErro() {
+      const box = document.getElementById('error-box');
+      box.classList.add('hidden');
+      document.getElementById('error-text').textContent = '';
+    }
+
+    function formatarChaveVisual(chave) {
+      return chave.replace(/(.{4})/g, '$1 ').trim();
+    }
+
+    function limparEstadoResultado(modo) {
+      estadoDados.chave = '';
+      estadoDados.remetenteCnpj = '';
+      estadoDados.destinatarioCnpj = '';
+      estadoDados.tomadorCnpj = '';
+      estadoDados.xmlBase64 = '';
+      estadoDados.pdfBase64 = '';
+
+      const badgeTipo = document.getElementById('badge-tipo-doc');
+      badgeTipo.classList.add('hidden');
+      badgeTipo.textContent = '';
+
+      if (modo === 'PROCESSANDO') {
+        definirCampoTexto('val-chave', 'LENDO CHAVE E CONSULTANDO DOCUMENTO...', true);
+        definirCampoTexto('val-remetente', 'PROCESSANDO...', true);
+        definirCampoTexto('val-destinatario', 'PROCESSANDO...', true);
+        definirCampoTexto('val-tomador', 'PROCESSANDO...', true);
+      } else if (modo === 'ERRO_LEITURA') {
+        definirCampoTexto('val-chave', 'LEITURA FALHOU', false);
+        definirCampoTexto('val-remetente', 'AGUARDANDO DOCUMENTO...', true);
+        definirCampoTexto('val-destinatario', 'AGUARDANDO DOCUMENTO...', true);
+        definirCampoTexto('val-tomador', 'AGUARDANDO DOCUMENTO...', true);
+      }
+
+      document.getElementById('copy-chave').disabled = true;
+      document.getElementById('copy-remetente').disabled = true;
+      document.getElementById('copy-destinatario').disabled = true;
+      document.getElementById('copy-tomador').disabled = true;
+      document.getElementById('btn-xml').disabled = true;
+      document.getElementById('btn-pdf').disabled = true;
+    }
+
+    function definirCampoTexto(id, texto, esmaecido) {
+      const el = document.getElementById(id);
+      el.textContent = texto;
+      if (esmaecido) {
+        el.classList.remove('text-black');
+        el.classList.add('text-neutral-600');
+      } else {
+        el.classList.remove('text-neutral-600');
+        el.classList.add('text-black');
+      }
+    }
+
+    function renderizarEntidade(idTexto, idBotao, entidade, chaveEstado) {
+      if (!entidade || (!entidade.cnpj_limpo && (!entidade.razao_social || entidade.razao_social === 'NULO'))) {
+        definirCampoTexto(idTexto, 'NULO', false);
+        estadoDados[chaveEstado] = '';
+        document.getElementById(idBotao).disabled = true;
+        return;
+      }
+
+      const cnpjFmt = entidade.cnpj_formatado || 'NULO';
+      const razao = entidade.razao_social || 'NULO';
+      definirCampoTexto(idTexto, `CNPJ: ${cnpjFmt} | RAZÃO SOCIAL: ${razao}`, false);
+
+      estadoDados[chaveEstado] = entidade.cnpj_limpo || '';
+      document.getElementById(idBotao).disabled = !estadoDados[chaveEstado];
+    }
+
+    async function enviarDocumento() {
+      const apiKey = (localStorage.getItem(STORAGE_KEY_GEMINI) || '').trim();
+      if (!apiKey) {
+        document.getElementById('api-drawer').classList.remove('hidden');
+        exibirErro('ERRO DE CONFIGURAÇÃO: Informe e salve sua chave de API do Gemini antes de continuar.');
+        return;
+      }
+
+      if (!arquivoSelecionado) {
+        exibirErro('ERRO DE ENTRADA: Selecione ou cole (Ctrl + V) a foto da nota ou CT-e primeiro.');
+        return;
+      }
+
+      ocultarErro();
+      limparEstadoResultado('PROCESSANDO');
+
+      const btn = document.getElementById('btn-processar');
+      const textoOriginal = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = 'PROCESSANDO DOCUMENTO...';
+
+      try {
+        const imagemOtimizada = await prepararImagemParaEnvio(arquivoSelecionado);
+        const formData = new FormData();
+        formData.append('imagem', imagemOtimizada, arquivoSelecionado.name || 'documento.jpg');
+        formData.append('gemini_api_key', apiKey);
+
+        const response = await fetch('/api/processar-nota', {
+          method: 'POST',
+          body: formData
+        });
+
+        const data = await response.json();
+
+        // Caso 1: Erro de leitura da chave pela IA
+        if (!response.ok || data.erro_tipo === 'LEITURA') {
+          limparEstadoResultado('ERRO_LEITURA');
+          exibirErro(`ERRO DE LEITURA: ${data.detail || 'Não foi possível identificar a chave de acesso.'}`);
+          return;
+        }
+
+        // Atualiza tipo do documento (NF-e / CT-e) e chave de acesso
+        const badgeTipo = document.getElementById('badge-tipo-doc');
+        if (data.tipo_documento) {
+          badgeTipo.textContent = data.tipo_documento;
+          badgeTipo.classList.remove('hidden');
+        }
+
+        estadoDados.chave = data.chave_acesso || '';
+        definirCampoTexto('val-chave', formatarChaveVisual(estadoDados.chave), false);
+        document.getElementById('copy-chave').disabled = !estadoDados.chave;
+
+        // Caso 2: Chave lida, mas consulta pública falhou (mantém chave copiável!)
+        if (data.erro_tipo === 'CONSULTA') {
+          definirCampoTexto('val-remetente', 'INDISPONÍVEL (ERRO NA CONSULTA)', false);
+          definirCampoTexto('val-destinatario', 'INDISPONÍVEL (ERRO NA CONSULTA)', false);
+          definirCampoTexto('val-tomador', 'INDISPONÍVEL (ERRO NA CONSULTA)', false);
+
+          document.getElementById('copy-remetente').disabled = true;
+          document.getElementById('copy-destinatario').disabled = true;
+          document.getElementById('copy-tomador').disabled = true;
+          document.getElementById('btn-xml').disabled = true;
+          document.getElementById('btn-pdf').disabled = true;
+
+          exibirErro(`ERRO DE CONSULTA: ${data.detail}`);
+          return;
+        }
+
+        // Caso 3: Sucesso (com suporte a NULO para tags ausentes)
+        ocultarErro();
+
+        renderizarEntidade('val-remetente', 'copy-remetente', data.remetente, 'remetenteCnpj');
+        renderizarEntidade('val-destinatario', 'copy-destinatario', data.destinatario, 'destinatarioCnpj');
+
+        if (data.tomador && data.tomador.modo === 'ENTIDADE') {
+          renderizarEntidade('val-tomador', 'copy-tomador', data.tomador, 'tomadorCnpj');
+        } else {
+          const textoTomador = (data.tomador && data.tomador.texto) ? data.tomador.texto : 'NULO';
+          definirCampoTexto('val-tomador', textoTomador, false);
+          estadoDados.tomadorCnpj = '';
+          document.getElementById('copy-tomador').disabled = true;
+        }
+
+        // Botões de download manuais (sem download automático)
+        estadoDados.xmlBase64 = data.xml_base64 || '';
+        estadoDados.pdfBase64 = data.pdf_base64 || '';
+        document.getElementById('btn-xml').disabled = !estadoDados.xmlBase64;
+        document.getElementById('btn-pdf').disabled = !estadoDados.pdfBase64;
+
+      } catch (err) {
+        limparEstadoResultado('ERRO_LEITURA');
+        exibirErro('ERRO DE CONEXÃO: Falha ao comunicar com o servidor. Tente novamente.');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = textoOriginal;
+      }
+    }
+
+    function copiarTexto(campo) {
+      const mapaValores = {
+        chave: { valor: estadoDados.chave, btnId: 'copy-chave' },
+        remetente: { valor: estadoDados.remetenteCnpj, btnId: 'copy-remetente' },
+        destinatario: { valor: estadoDados.destinatarioCnpj, btnId: 'copy-destinatario' },
+        tomador: { valor: estadoDados.tomadorCnpj, btnId: 'copy-tomador' }
+      };
+
+      const item = mapaValores[campo];
+      if (!item || !item.valor) return;
+
+      navigator.clipboard.writeText(item.valor).then(() => {
+        const btn = document.getElementById(item.btnId);
+        const original = btn.textContent;
+        btn.textContent = 'COPIADO';
+        btn.classList.add('bg-[#7DF9A6]', 'text-black');
+        btn.classList.remove('bg-black', 'text-white');
+
+        setTimeout(() => {
+          btn.textContent = original;
+          btn.classList.remove('bg-[#7DF9A6]', 'text-black');
+          btn.classList.add('bg-black', 'text-white');
+        }, 1400);
+      });
+    }
+
+    function baixarArquivo(tipo) {
+      const base64 = tipo === 'xml' ? estadoDados.xmlBase64 : estadoDados.pdfBase64;
+      if (!base64 || !estadoDados.chave) return;
+
+      const mime = tipo === 'xml' ? 'application/xml' : 'application/pdf';
+      const extensao = tipo === 'xml' ? 'xml' : 'pdf';
+
+      const link = document.createElement('a');
+      link.href = `data:${mime};base64,${base64}`;
+      link.download = `${estadoDados.chave}.${extensao}`;
+      link.click();
+    }
+  </script>
+</body>
+</html>
