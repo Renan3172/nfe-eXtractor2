@@ -23,6 +23,13 @@ MODELOS_GEMINI_CANDIDATOS = [
     "gemini-flash-latest",
 ]
 
+# Modelos Flash completos acionados apenas como reforço se um modelo "lite" falhar no Módulo 11
+MODELOS_GEMINI_REFORCO = [
+    "gemini-3.8-flash",
+    "gemini-3.6-flash",
+    "gemini-2.5-flash",
+]
+
 _CACHE_GEMINI: Dict[str, Tuple[str, str]] = {}
 
 # Endpoints públicos de consulta pela chave de 44 dígitos (NF-e)
@@ -36,20 +43,32 @@ MENSAGEM_ALERTA_CTE = (
 
 PROMPT_OCR_FISCAL = """
 Você é um especialista em OCR de documentos fiscais brasileiros (DANFE de NF-e/NFC-e e DACTE de CT-e/CT-e OS).
-Analise a imagem (mesmo que esteja inclinada, rotacionada, borrada ou com baixa iluminação) e extraia EXCLUSIVAMENTE a Chave de Acesso de 44 dígitos numéricos.
+Analise a imagem (mesmo inclinada, recortada, borrada ou com baixa iluminação) e extraia EXCLUSIVAMENTE a Chave de Acesso de EXATAMENTE 44 dígitos numéricos.
 
 Onde procurar:
 1. Localize o bloco "CHAVE DE ACESSO" no DANFE ou no DACTE, geralmente logo abaixo do código de barras principal.
-2. Os 44 dígitos costumam aparecer em 11 grupos de 4 números separados por espaços.
+2. A chave pode aparecer separada em 11 grupos de 4 dígitos OU impressa de forma contínua (todos os 44 dígitos colados sem espaços), tanto em CT-e quanto em NF-e/NFC-e.
+
+ATENÇÃO CRÍTICA PARA CHAVES SEM ESPAÇOS E DÍGITOS REPETIDOS:
+Quando os 44 dígitos estiverem colados sem espaços (ou com baixa resolução), sequências repetidas como "1111", "0001" ou "000000" podem induzir erro de contagem.
+Para garantir precisão absoluta em NF-e, NFC-e, CT-e e CT-e OS, decomponha mentalmente a chave nos 9 blocos oficiais da SEFAZ antes de montar o resultado:
+1. UF (2 dígitos, ex: 41, 35)
+2. AAMM (4 dígitos: ano e mês, ex: 2611)
+3. CNPJ do emitente (14 dígitos - conte cada dígito repetido com cuidado, ex: 1111, 0001)
+4. Modelo (2 dígitos: 55, 65, 57 ou 67)
+5. Série (3 dígitos, ex: 001, 007)
+6. Número do documento (9 dígitos - conte TODOS os zeros à esquerda com extrema precisão, ex: 000000310)
+7. Tipo de emissão (1 dígito)
+8. Código numérico (8 dígitos)
+9. Dígito Verificador (1 dígito final)
 
 Regras obrigatórias:
-- A chave possui EXATAMENTE 44 dígitos numéricos (0 a 9).
-- Os dígitos 21 e 22 indicam o modelo do documento: "55" (NF-e), "65" (NFC-e), "57" (CT-e) ou "67" (CT-e OS).
-- Tenha atenção redobrada para não confundir dígitos borrados (0 e 8, 1 e 7, 5 e 6, 3 e 8).
+- Confirme que a soma dos blocos (2+4+14+2+3+9+1+8+1) totaliza EXATAMENTE 44 dígitos numéricos (0 a 9).
+- Não confunda dígitos parecidos (0 e 8, 1 e 7, 5 e 6, 3 e 8).
 - Remova todos os espaços, pontos, traços ou letras.
 
 Formato de saída:
-Retorne SOMENTE os 44 dígitos contínuos, sem texto explicativo, sem markdown e sem quebras de linha.
+Retorne SOMENTE os 44 dígitos contínuos, sem texto explicativo, sem rótulos, sem markdown e sem quebras de linha.
 Se não for possível ler os 44 dígitos com segurança, retorne apenas: ERRO_LEITURA
 """.strip()
 
@@ -58,6 +77,14 @@ MAPA_MODELOS = {
     "65": "NFC-e",
     "57": "CT-e",
     "67": "CT-e OS",
+}
+
+UFS_VALIDAS = {
+    "11", "12", "13", "14", "15", "16", "17",
+    "21", "22", "23", "24", "25", "26", "27", "28", "29",
+    "31", "32", "33", "35",
+    "41", "42", "43",
+    "50", "51", "52", "53",
 }
 
 MAPA_MOD_FRETE = {
@@ -87,6 +114,76 @@ def validar_chave_acesso(chave: str) -> bool:
     resto = soma % 11
     dv_esperado = 0 if resto in (0, 1) else 11 - resto
     return dv_esperado == int(chave[43])
+
+
+def _chave_estruturalmente_plausivel(chave: str) -> bool:
+    """Validação estrita usada apenas na autocorreção: Módulo 11 + UF IBGE + mês 01..12 + tpEmis."""
+    if not validar_chave_acesso(chave):
+        return False
+    if chave[:2] not in UFS_VALIDAS:
+        return False
+    mes = int(chave[4:6])
+    if not (1 <= mes <= 12):
+        return False
+    if chave[34] == "0":
+        return False
+    return True
+
+
+def _tentar_reparar_chave_repeticao(chave_bruta: str) -> Optional[str]:
+    """
+    Corrige erro típico de OCR em chaves sem espaços (NF-e, NFC-e, CT-e ou CT-e OS) quando
+    o modelo engole ou duplica 1 dígito em sequências repetidas (ex: '00000' -> '000000').
+    Retorna imediatamente sem alterar nada caso a chave lida já seja válida.
+    """
+    if validar_chave_acesso(chave_bruta):
+        return chave_bruta
+
+    if not chave_bruta.isdigit():
+        return None
+
+    # Caso 1: 43 dígitos (engoliu 1 dígito em uma sequência)
+    if len(chave_bruta) == 43:
+        candidatos_runs = set()
+        for i in range(43):
+            em_sequencia = (i > 0 and chave_bruta[i] == chave_bruta[i - 1]) or (
+                i < 42 and chave_bruta[i] == chave_bruta[i + 1]
+            )
+            if em_sequencia:
+                tentativa = chave_bruta[:i] + chave_bruta[i] + chave_bruta[i:]
+                if _chave_estruturalmente_plausivel(tentativa):
+                    candidatos_runs.add(tentativa)
+
+        if len(candidatos_runs) == 1:
+            return candidatos_runs.pop()
+        if len(candidatos_runs) > 1:
+            return None
+
+        # Fallback caso o dígito omitido fizesse parte de um par (ex: '00' lido como '0')
+        candidatos_gerais = set()
+        for i in range(43):
+            tentativa = chave_bruta[:i] + chave_bruta[i] + chave_bruta[i:]
+            if _chave_estruturalmente_plausivel(tentativa):
+                candidatos_gerais.add(tentativa)
+
+        if len(candidatos_gerais) == 1:
+            return candidatos_gerais.pop()
+        return None
+
+    # Caso 2: 45 dígitos (duplicou 1 dígito em uma sequência repetida)
+    if len(chave_bruta) == 45:
+        candidatos_validos = set()
+        for i in range(44):
+            if chave_bruta[i] == chave_bruta[i + 1]:
+                tentativa = chave_bruta[:i] + chave_bruta[i + 1:]
+                if _chave_estruturalmente_plausivel(tentativa):
+                    candidatos_validos.add(tentativa)
+
+        if len(candidatos_validos) == 1:
+            return candidatos_validos.pop()
+        return None
+
+    return None
 
 
 def extrair_metadados_chave(chave: str) -> Dict[str, str]:
@@ -262,10 +359,50 @@ def _chamar_endpoint_gemini(
     )
 
 
+def _extrair_texto_resposta_gemini(resp: requests.Response) -> Optional[str]:
+    try:
+        dados = resp.json()
+        return dados["candidates"][0]["content"]["parts"][0]["text"].strip()
+    except (KeyError, IndexError, ValueError, TypeError):
+        return None
+
+
+def _tentar_reforco_modelo_completo(
+    provedor: str, modelo_anterior: str, api_key: str, payload: Dict[str, Any]
+) -> Optional[str]:
+    """Aciona um modelo Flash completo apenas se o modelo lite retornou chave inválida."""
+    if "lite" not in modelo_anterior.lower():
+        return None
+
+    for modelo_forte in MODELOS_GEMINI_REFORCO:
+        if modelo_forte == modelo_anterior:
+            continue
+        try:
+            resp = _chamar_endpoint_gemini(provedor, modelo_forte, api_key, payload)
+        except requests.RequestException:
+            continue
+
+        if not resp.ok:
+            continue
+
+        texto = _extrair_texto_resposta_gemini(resp)
+        if not texto or "ERRO_LEITURA" in texto.upper():
+            continue
+
+        chave_reparada = _tentar_reparar_chave_repeticao(limpar_digitos(texto))
+        if chave_reparada:
+            return chave_reparada
+
+        # Se o modelo completo respondeu sem erro HTTP mas ainda falhou, evita multiplicar chamadas
+        break
+
+    return None
+
+
 def extrair_chave_via_gemini(
     imagem_bytes: bytes, mime_type: str, api_key: str
 ) -> Tuple[Optional[str], Optional[str]]:
-    """Envia a imagem para o Gemini com fallback automático em 404, 429 e 503."""
+    """Envia a imagem para o Gemini com fallback automático em 404/429/503 e reparo Módulo 11."""
     chave_limpa = api_key.strip()
     imagem_b64 = base64.b64encode(imagem_bytes).decode("utf-8")
 
@@ -291,8 +428,10 @@ def extrair_chave_via_gemini(
 
     tentativas = _montar_tentativas_gemini(chave_limpa)
     resp_sucesso: Optional[requests.Response] = None
+    provedor_usado = "vertex" if chave_limpa.startswith("AQ.") else "aistudio"
+    modelo_usado = ""
     ultimo_erro = "Erro desconhecido na API do Gemini."
-    cache_key = "vertex" if chave_limpa.startswith("AQ.") else "aistudio"
+    cache_key = provedor_usado
     teve_indisponibilidade = False
     teve_cota = False
     testados: List[Tuple[str, str]] = []
@@ -312,6 +451,8 @@ def extrair_chave_via_gemini(
 
         if resp.ok:
             resp_sucesso = resp
+            provedor_usado = provedor
+            modelo_usado = modelo
             _CACHE_GEMINI[cache_key] = (provedor, modelo)
             break
 
@@ -342,6 +483,8 @@ def extrair_chave_via_gemini(
                 resp = _chamar_endpoint_gemini("aistudio", modelo_extra, chave_limpa, payload)
                 if resp.ok:
                     resp_sucesso = resp
+                    provedor_usado = "aistudio"
+                    modelo_usado = modelo_extra
                     _CACHE_GEMINI[cache_key] = par
                     break
                 if resp.status_code in (500, 502, 503, 504):
@@ -363,6 +506,8 @@ def extrair_chave_via_gemini(
                 resp = _chamar_endpoint_gemini(provedor_retry, modelo_retry, chave_limpa, payload)
                 if resp.ok:
                     resp_sucesso = resp
+                    provedor_usado = provedor_retry
+                    modelo_usado = modelo_retry
                     _CACHE_GEMINI[cache_key] = (provedor_retry, modelo_retry)
                     break
                 ultimo_erro = (
@@ -390,21 +535,31 @@ def extrair_chave_via_gemini(
             "Verifique se a chave está correta em Configurar API.",
         )
 
-    try:
-        dados = resp_sucesso.json()
-        texto = dados["candidates"][0]["content"]["parts"][0]["text"].strip()
-    except (KeyError, IndexError, ValueError, TypeError):
+    texto = _extrair_texto_resposta_gemini(resp_sucesso)
+    if not texto:
         return None, "Não foi possível interpretar a resposta da IA para esta imagem."
 
     if "ERRO_LEITURA" in texto.upper():
+        chave_reforco = _tentar_reforco_modelo_completo(
+            provedor_usado, modelo_usado, chave_limpa, payload
+        )
+        if chave_reforco:
+            return chave_reforco, None
         return (
             None,
             "Não foi possível identificar a chave de acesso de 44 dígitos. "
             "Tente enviar uma foto mais próxima, reta e sob boa luz.",
         )
 
-    chave = limpar_digitos(texto)
-    if not validar_chave_acesso(chave):
+    chave_bruta = limpar_digitos(texto)
+    chave = _tentar_reparar_chave_repeticao(chave_bruta)
+
+    if not chave:
+        chave = _tentar_reforco_modelo_completo(
+            provedor_usado, modelo_usado, chave_limpa, payload
+        )
+
+    if not chave:
         return (
             None,
             "A chave lida pela IA não passou na validação matemática (Módulo 11) ou "
@@ -758,7 +913,7 @@ async def processar_nota(
 
     mime_type = imagem.content_type or "image/jpeg"
 
-    # Etapa 1: OCR Fiscal com Gemini + validação Módulo 11
+    # Etapa 1: OCR Fiscal com Gemini + validação/reparo Módulo 11
     chave, erro_leitura = extrair_chave_via_gemini(
         imagem_bytes=imagem_bytes,
         mime_type=mime_type,
