@@ -24,7 +24,7 @@ Aplicação web leve para leitura e extração rápida de dados de documentos fi
 
 ---
 
-# Como utilizar
+## Como utilizar
 
 * 1° Acesse: https://nf-extractor2.vercel.app/  
 * 2° Clique em Configurar API no canto superior direito, cole sua chave da Google Gemini API e clique em Salvar Chave (o status mudará para STATUS API GEMINI: OK).  
