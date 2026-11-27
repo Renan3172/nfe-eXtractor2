@@ -26,11 +26,11 @@ Aplicação web leve para leitura e extração rápida de dados de documentos fi
 
 # Como utilizar
 
-1° Acesse: https://nf-extractor2.vercel.app/  
-2° Clique em Configurar API no canto superior direito, cole sua chave da Google Gemini API e clique em Salvar Chave (o status mudará para STATUS API GEMINI: OK).  
-3° Envie a imagem do documento fiscal clicando na área de upload, arrastando o arquivo ou pressionando Ctrl + V.  
-4° Clique em ENVIAR FOTO / EXTRAIR DOCUMENTO.  
-5° Utilize os botões COPIAR para levar a chave, o número do documento ou os CNPJs limpos direto para o seu sistema, ou clique em Baixar XML / Baixar PDF quando disponível.  
+*1° Acesse: https://nf-extractor2.vercel.app/  
+*2° Clique em Configurar API no canto superior direito, cole sua chave da Google Gemini API e clique em Salvar Chave (o status mudará para STATUS API GEMINI: OK).  
+*3° Envie a imagem do documento fiscal clicando na área de upload, arrastando o arquivo ou pressionando Ctrl + V.  
+*4° Clique em ENVIAR FOTO / EXTRAIR DOCUMENTO.  
+*5° Utilize os botões COPIAR para levar a chave, o número do documento ou os CNPJs limpos direto para o seu sistema, ou clique em Baixar XML / Baixar PDF quando disponível.  
 
 ---
 
