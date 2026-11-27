@@ -1,5 +1,6 @@
 import base64
 import re
+import time
 import xml.etree.ElementTree as ET
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -9,15 +10,18 @@ from fastapi.responses import JSONResponse
 
 app = FastAPI()
 
-# Modelos Flash testados em ordem de prioridade caso algum retorne HTTP 404
+# Modelos Flash atuais testados em ordem de velocidade e disponibilidade
 MODELOS_GEMINI_CANDIDATOS = [
-    "gemini-2.5-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-3.8-flash",
+    "gemini-3.1-flash-lite",
+    "gemini-3.6-flash",
     "gemini-2.5-flash-lite",
-    "gemini-2.0-flash",
+    "gemini-2.5-flash",
     "gemini-flash-latest",
 ]
 
-# Cache leve em memória para evitar novas tentativas após achar o endpoint/modelo ativo
+# Cache leve em memória para reutilizar direto o primeiro modelo que responder com sucesso
 _CACHE_GEMINI: Dict[str, Tuple[str, str]] = {}
 
 # Endpoints públicos de consulta pela chave de 44 dígitos
@@ -103,8 +107,8 @@ def _extrair_mensagem_erro_google(resp: requests.Response) -> str:
     return f"HTTP {resp.status_code}"
 
 
-def _descobrir_modelo_aistudio(api_key: str) -> Optional[str]:
-    """Consulta a lista de modelos ativos no Google AI Studio caso os nomes padrão deem 404."""
+def _descobrir_modelos_aistudio(api_key: str) -> List[str]:
+    """Consulta modelos Flash multimodais ativos na conta caso todos os fixos falhem."""
     try:
         resp = requests.get(
             "https://generativelanguage.googleapis.com/v1beta/models",
@@ -112,10 +116,23 @@ def _descobrir_modelo_aistudio(api_key: str) -> Optional[str]:
             timeout=10,
         )
         if not resp.ok:
-            return None
+            return []
         modelos = resp.json().get("models", [])
     except Exception:
-        return None
+        return []
+
+    termos_ignorar = (
+        "embedding",
+        "tts",
+        "live",
+        "image",
+        "imagen",
+        "audio",
+        "transcribe",
+        "veo",
+        "omni",
+        "cyber",
+    )
 
     preferidos: List[str] = []
     alternativos: List[str] = []
@@ -126,31 +143,34 @@ def _descobrir_modelo_aistudio(api_key: str) -> Optional[str]:
         if "generateContent" not in metodos:
             continue
         slug = nome_completo.replace("models/", "").strip()
-        if not slug or "embedding" in slug or "tts" in slug or "imagen" in slug:
+        if not slug or any(t in slug for t in termos_ignorar):
             continue
         if "gemini" in slug and "flash" in slug:
             preferidos.append(slug)
         elif "gemini" in slug:
             alternativos.append(slug)
 
-    if preferidos:
-        return preferidos[0]
-    if alternativos:
-        return alternativos[0]
-    return None
+    return preferidos + alternativos
 
 
 def _montar_tentativas_gemini(api_key: str) -> List[Tuple[str, str]]:
-    """Monta a ordem de (provedor, modelo) priorizando o formato da chave (AQ. vs AIza)."""
+    """Define a ordem de (provedor, modelo) evitando rotas incompatíveis com o prefixo da chave."""
     chave_limpa = api_key.strip()
     eh_vertex = chave_limpa.startswith("AQ.")
+    eh_aistudio = chave_limpa.startswith("AIza")
     cache_key = "vertex" if eh_vertex else "aistudio"
 
     tentativas: List[Tuple[str, str]] = []
     if cache_key in _CACHE_GEMINI:
         tentativas.append(_CACHE_GEMINI[cache_key])
 
-    ordem_provedores = ["vertex", "aistudio"] if eh_vertex else ["aistudio", "vertex"]
+    if eh_vertex:
+        ordem_provedores = ["vertex", "aistudio"]
+    elif eh_aistudio:
+        ordem_provedores = ["aistudio"]
+    else:
+        ordem_provedores = ["aistudio", "vertex"]
+
     for provedor in ordem_provedores:
         for modelo in MODELOS_GEMINI_CANDIDATOS:
             par = (provedor, modelo)
@@ -173,7 +193,7 @@ def _chamar_endpoint_gemini(
             params={"key": api_key},
             json=payload,
             headers={"Content-Type": "application/json"},
-            timeout=25,
+            timeout=15,
         )
 
     url = (
@@ -187,14 +207,14 @@ def _chamar_endpoint_gemini(
             "Content-Type": "application/json",
             "x-goog-api-key": api_key,
         },
-        timeout=25,
+        timeout=15,
     )
 
 
 def extrair_chave_via_gemini(
     imagem_bytes: bytes, mime_type: str, api_key: str
 ) -> Tuple[Optional[str], Optional[str]]:
-    """Envia a imagem para o Gemini com suporte automático a chaves AQ. e AIza."""
+    """Envia a imagem para o Gemini com fallback automático em 404, 429 e 503."""
     chave_limpa = api_key.strip()
     imagem_b64 = base64.b64encode(imagem_bytes).decode("utf-8")
 
@@ -222,12 +242,20 @@ def extrair_chave_via_gemini(
     resp_sucesso: Optional[requests.Response] = None
     ultimo_erro = "Erro desconhecido na API do Gemini."
     cache_key = "vertex" if chave_limpa.startswith("AQ.") else "aistudio"
+    teve_indisponibilidade = False
+    teve_cota = False
+    testados: List[Tuple[str, str]] = []
 
     for provedor, modelo in tentativas:
+        testados.append((provedor, modelo))
         try:
             resp = _chamar_endpoint_gemini(provedor, modelo, chave_limpa, payload)
         except requests.Timeout:
-            return None, "Tempo limite excedido ao conectar com a API do Gemini. Tente novamente."
+            teve_indisponibilidade = True
+            ultimo_erro = f"Timeout ({provedor}/{modelo})"
+            if _CACHE_GEMINI.get(cache_key) == (provedor, modelo):
+                _CACHE_GEMINI.pop(cache_key, None)
+            continue
         except requests.RequestException:
             return None, "Falha de conexão ao comunicar com a API do Gemini."
 
@@ -236,37 +264,80 @@ def extrair_chave_via_gemini(
             _CACHE_GEMINI[cache_key] = (provedor, modelo)
             break
 
+        if _CACHE_GEMINI.get(cache_key) == (provedor, modelo):
+            _CACHE_GEMINI.pop(cache_key, None)
+
         detalhe = _extrair_mensagem_erro_google(resp)
         ultimo_erro = f"HTTP {resp.status_code} ({provedor}/{modelo}): {detalhe}"
 
-        # Se for erro de cota, interrompe imediatamente
-        if resp.status_code == 429:
-            return None, "Limite de requisições da sua chave Gemini atingido. Aguarde alguns segundos."
+        # Erros transitórios (sobrecarga / cota por modelo) -> tenta próximo modelo ativo
+        if resp.status_code in (500, 502, 503, 504):
+            teve_indisponibilidade = True
+            continue
 
-        # Em 404 ou erro de incompatibilidade de endpoint, tenta o próximo candidato
+        if resp.status_code == 429:
+            teve_cota = True
+            continue
+
         if resp.status_code in (400, 401, 403, 404):
             continue
 
         return None, f"Erro retornado pela API do Gemini ({ultimo_erro})."
 
-    # Se todos os candidatos falharam e for chave AIza, tenta descobrir dinamicamente um modelo ativo
+    # Se todos deram erro e for chave AI Studio, tenta descobrir outro modelo ativo na conta
     if resp_sucesso is None and not chave_limpa.startswith("AQ."):
-        modelo_ativo = _descobrir_modelo_aistudio(chave_limpa)
-        if modelo_ativo:
+        for modelo_extra in _descobrir_modelos_aistudio(chave_limpa):
+            par = ("aistudio", modelo_extra)
+            if par in testados:
+                continue
+            testados.append(par)
             try:
-                resp = _chamar_endpoint_gemini("aistudio", modelo_ativo, chave_limpa, payload)
+                resp = _chamar_endpoint_gemini("aistudio", modelo_extra, chave_limpa, payload)
                 if resp.ok:
                     resp_sucesso = resp
-                    _CACHE_GEMINI[cache_key] = ("aistudio", modelo_ativo)
-                else:
-                    ultimo_erro = (
-                        f"HTTP {resp.status_code} (aistudio/{modelo_ativo}): "
-                        f"{_extrair_mensagem_erro_google(resp)}"
-                    )
+                    _CACHE_GEMINI[cache_key] = par
+                    break
+                if resp.status_code in (500, 502, 503, 504):
+                    teve_indisponibilidade = True
+                ultimo_erro = (
+                    f"HTTP {resp.status_code} (aistudio/{modelo_extra}): "
+                    f"{_extrair_mensagem_erro_google(resp)}"
+                )
             except requests.RequestException:
-                pass
+                continue
+            if len(testados) >= len(tentativas) + 2:
+                break
+
+    # Retry curto se houve sobrecarga temporária (HTTP 503) nos servidores do Google
+    if resp_sucesso is None and teve_indisponibilidade:
+        time.sleep(1.2)
+        provedor_retry = "vertex" if chave_limpa.startswith("AQ.") else "aistudio"
+        for modelo_retry in MODELOS_GEMINI_CANDIDATOS[:2]:
+            try:
+                resp = _chamar_endpoint_gemini(provedor_retry, modelo_retry, chave_limpa, payload)
+                if resp.ok:
+                    resp_sucesso = resp
+                    _CACHE_GEMINI[cache_key] = (provedor_retry, modelo_retry)
+                    break
+                ultimo_erro = (
+                    f"HTTP {resp.status_code} ({provedor_retry}/{modelo_retry}): "
+                    f"{_extrair_mensagem_erro_google(resp)}"
+                )
+            except requests.RequestException:
+                continue
 
     if resp_sucesso is None:
+        if teve_indisponibilidade:
+            return (
+                None,
+                "Os servidores da API do Gemini estão com alta demanda momentânea (HTTP 503). "
+                "Aguarde alguns segundos e clique em Enviar novamente.",
+            )
+        if teve_cota:
+            return (
+                None,
+                "Limite de requisições da sua chave Gemini atingido. Aguarde alguns segundos.",
+            )
         return (
             None,
             f"Erro retornado pela API do Gemini ({ultimo_erro}). "
