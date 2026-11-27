@@ -43,11 +43,8 @@ Aplicação web leve para leitura e extração rápida de dados de documentos fi
 
 ---
 
-## Estrutura do Projeto
-
-nf-extractor-2/
-├── api/
-│   └── index.py          # Backend FastAPI (OCR Gemini, Módulo 11, consulta NF-e e parser XML)
-├── public/
-│   └── index.html        # Interface web
-└── requirements.txt      # Dependências Python
+nf-extractor-2/  
+  
+api/index.py - Backend FastAPI (OCR Gemini, Módulo 11, consulta NF-e e parser XML)  
+public/index.html - Interface web  
+requirements.txt - Dependências Python
